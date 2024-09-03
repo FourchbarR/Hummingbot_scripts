@@ -120,7 +120,6 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         self._last_taker_sell_price = None
 
         self._main_task = None
-        self._taker_order_timestamps = {}
         self._gateway_quotes_task = None
         self._cancel_outdated_orders_task = None
         self._hedge_maker_order_tasks = []
@@ -138,7 +137,8 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         all_markets = list(self._maker_markets | self._taker_markets)
 
         self.add_markets(all_markets)
-
+        self._taker_order_timestamps = {}
+        
     @property
     def order_amount(self):
         return self._config_map.order_amount
@@ -248,7 +248,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         return market_info.market.name in AllConnectorSettings.get_gateway_amm_connector_names()
 
     def get_conversion_rates(self, market_pair: MarketTradingPairTuple):
-        quote_pair, quote_rate_source, quote_rate, base_pair, base_rate_source, base_rate, gas_pair, gas_rate_source,\
+        quote_pair, quote_rate_source, quote_rate, base_pair, base_rate_source, base_rate, gas_pair, gas_rate_source, \
             gas_rate = self._config_map.conversion_rate_mode.get_conversion_rates(market_pair)
         if quote_rate is None:
             self.logger().warning(f"Can't find a conversion rate for {quote_pair}")
@@ -256,12 +256,12 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             self.logger().warning(f"Can't find a conversion rate for {base_pair}")
         if gas_rate is None:
             self.logger().warning(f"Can't find a conversion rate for {gas_pair}")
-        return quote_pair, quote_rate_source, quote_rate, base_pair, base_rate_source, base_rate, gas_pair,\
+        return quote_pair, quote_rate_source, quote_rate, base_pair, base_rate_source, base_rate, gas_pair, \
             gas_rate_source, gas_rate
 
     def log_conversion_rates(self):
         for market_pair in self._market_pairs.values():
-            quote_pair, quote_rate_source, quote_rate, base_pair, base_rate_source, base_rate, gas_pair,\
+            quote_pair, quote_rate_source, quote_rate, base_pair, base_rate_source, base_rate, gas_pair, \
                 gas_rate_source, gas_rate = self.get_conversion_rates(market_pair)
             if quote_pair.split("-")[0] != quote_pair.split("-")[1]:
                 self.logger().info(f"{quote_pair} ({quote_rate_source}) conversion rate: {PerformanceMetrics.smart_round(quote_rate)}")
@@ -275,7 +275,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         columns = ["Source", "Pair", "Rate"]
         data = []
         for market_pair in self._market_pairs.values():
-            quote_pair, quote_rate_source, quote_rate, base_pair, base_rate_source, base_rate, gas_pair,\
+            quote_pair, quote_rate_source, quote_rate, base_pair, base_rate_source, base_rate, gas_pair, \
                 gas_rate_source, gas_rate = self.get_conversion_rates(market_pair)
             if quote_pair.split("-")[0] != quote_pair.split("-")[1]:
                 data.extend([
@@ -346,7 +346,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 limit_orders = list(tracked_maker_orders[market_pair].values())
                 bid, ask = self.get_top_bid_ask(market_pair)
                 mid_price = (bid + ask) / 2
-                df = LimitOrder.to_pandas(limit_orders, mid_price)
+                df = LimitOrder.to_pandas(limit_orders, float(mid_price))
                 df_lines = str(df).split("\n")
                 lines.extend(["", "  Active maker market orders:"] +
                              ["    " + line for line in df_lines])
@@ -422,31 +422,35 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
 
         if self._cancel_outdated_orders_task is None or self._cancel_outdated_orders_task.done():
             self._cancel_outdated_orders_task = safe_ensure_future(self.apply_gateway_transaction_cancel_interval())
+        
+        self.logger().info("Calling check_taker_orders_expiration to verify expired taker orders.")
+        safe_ensure_future(self.check_taker_orders_expiration(timestamp))
 
-    
-    async def check_taker_order_expiration(self, timestamp: float):
-        orders_to_cancel = []
-        for order_id, order_timestamp in self._taker_order_timestamps.items():
-            if timestamp - order_timestamp >= 120:  # 2 minutes expiration time
-                orders_to_cancel.append(order_id)
+    async def check_taker_orders_expiration(self, timestamp: float):
+       expired_order_ids = []
+       for order_id, order_timestamp in list(self._taker_order_timestamps.items()):
+           self.logger().info(f"Order {order_id} placed at {order_timestamp}, current time {timestamp}")
+           if timestamp - order_timestamp > 120:  # 120 secondes = 2 minutes
+               expired_order_ids.append(order_id)
 
-        for order_id in orders_to_cancel:
-            self.logger().info(f"Cancelling taker order {order_id} due to expiration and converting to market order.")
-            # Cancel the limit order
-            await self.cancel_order(self._market_pair_tracker.get_market_pair_from_order_id(order_id).taker, order_id)
-            # Replace it with a market order
-            maker_order_id = self._taker_to_maker_order_ids[order_id]
-            order_amount = self._maker_to_taker_order_ids[maker_order_id][order_id]
-            is_buy = self._market_pair_tracker.get_market_pair_from_order_id(order_id).taker.is_buy_order(order_id)
-            self.place_order(
-                self._market_pair_tracker.get_market_pair_from_order_id(order_id),
-                is_buy,
-                False,
-                order_amount
-            )
-            # Clean up the mappings
-            self.cleanup_taker_order(order_id)
-            del self._taker_order_timestamps[order_id]
+       for order_id in expired_order_ids:
+           await self.handle_expired_taker_order(order_id)
+           
+    async def handle_expired_taker_order(self, order_id: str):
+       market_pair = self._market_pair_tracker.get_market_pair_from_order_id(order_id)
+       taker_market = market_pair.taker.market
+       self.logger().info(f"Attempting to cancel order {order_id} on taker market")
+       await taker_market.cancel_order(order_id)
+       
+       self.logger().info(f"Order {order_id} expired after 2 minutes. Cancelling and re-executing as market order.")
+       
+       del self._taker_order_timestamps[order_id]
+       if order_id in self._taker_to_maker_order_ids:
+           maker_order_id = self._taker_to_maker_order_ids[order_id]
+           fill_records = self.get_unhedged_buy_records(market_pair) if taker_market.is_buy_order(order_id) else self.get_unhedged_sell_records(market_pair)
+           
+           amount = sum([fill_event.amount for _, fill_event in fill_records])
+           await taker_market.create_market_order(taker_market.trading_pair, taker_market.is_buy_order(order_id), amount)
 
     async def main(self, timestamp: float):
         try:
@@ -467,8 +471,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
 
             # Process each market pair independently.
             for market_pair in self._market_pairs.values():
-                await self.check_taker_order_expiration(timestamp)
-            await self.process_market_pair(timestamp, market_pair, market_pair_to_active_orders[market_pair])
+                await self.process_market_pair(timestamp, market_pair, market_pair_to_active_orders[market_pair])
 
             # log conversion rates every 5 minutes
             if self._last_conv_rates_logged + (60. * 5) < timestamp:
@@ -601,7 +604,9 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         # See if it's profitable to place a limit order on maker market.
         await self.check_and_create_new_orders(market_pair, has_active_bid, has_active_ask)
 
-    async def hedge_filled_maker_order(self, order_filled_event):
+    async def hedge_filled_maker_order(self,
+                                       maker_order_id: str,
+                                       order_filled_event: OrderFilledEvent):
         """
         If a limit order previously made to the maker side has been filled, hedge it on the taker side.
         :param order_filled_event: event object
@@ -644,7 +649,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
 
             # Call check_and_hedge_orders() to emit the orders on the taker side.
             try:
-                await self.check_and_hedge_orders(market_pair)
+                await self.check_and_hedge_orders(maker_order_id, market_pair)
             except Exception:
                 self.log_with_clock(logging.ERROR, "Unexpected error.", exc_info=True)
 
@@ -662,30 +667,29 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         # Resubmit hedging order
         self.hedge_tasks_cleanup()
         self._hedge_maker_order_tasks += [safe_ensure_future(
-            self.check_and_hedge_orders(market_pair)
+            self.check_and_hedge_orders(order_id, market_pair)
         )]
 
         # Remove the cancelled, failed or expired taker order
         del self._taker_to_maker_order_ids[order_event.order_id]
 
     def did_fill_order(self, order_filled_event: OrderFilledEvent):
-        order_id = order_filled_event.order_id
+        maker_order_id = order_filled_event.order_id
         exchange_trade_id = order_filled_event.exchange_trade_id
-        if order_id in self._maker_to_taker_order_ids.keys():
+        if maker_order_id in self._maker_to_taker_order_ids.keys():
             # Maker order filled
             # Check if this fill was already processed or not
-            if order_id not in self._maker_to_hedging_trades.keys():
-                self._maker_to_hedging_trades[order_id] = []
-            if exchange_trade_id not in self._maker_to_hedging_trades[order_id]:
+            if maker_order_id not in self._maker_to_hedging_trades.keys():
+                self._maker_to_hedging_trades[maker_order_id] = []
+            if exchange_trade_id not in self._maker_to_hedging_trades[maker_order_id]:
                 # This maker fill has not been processed yet, submit Taker hedge order
                 # Values have to be unique in a bidict
-                self._ongoing_hedging[order_filled_event.exchange_trade_id] = order_filled_event.exchange_trade_id
 
-                self._maker_to_hedging_trades[order_id] += [exchange_trade_id]
+                self._maker_to_hedging_trades[maker_order_id] += [exchange_trade_id]
 
                 self.hedge_tasks_cleanup()
                 self._hedge_maker_order_task = safe_ensure_future(
-                    self.hedge_filled_maker_order(order_filled_event)
+                    self.hedge_filled_maker_order(maker_order_id, order_filled_event)
                 )
 
     def did_cancel_order(self, order_canceled_event: OrderCancelledEvent):
@@ -751,15 +755,14 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                         del self._maker_to_hedging_trades[maker_order_id]
 
                 try:
-                    maker_exchange_trade_id = self._ongoing_hedging.inverse[order_id]
-                    del self._ongoing_hedging[maker_exchange_trade_id]
+                    self.del_order_from_ongoing_hedging(order_id)
                 except KeyError:
                     self.logger().warning(f"Ongoing hedging not found for order id {order_id}")
 
                 # Delete hedged maker fill event
                 fill_events = []
                 for fill_event in self._order_fill_sell_events[market_pair]:
-                    if fill_event[1].exchange_trade_id in self._ongoing_hedging.keys():
+                    if self.is_fill_event_in_ongoing_hedging(fill_event):
                         fill_events += [fill_event]
                 self._order_fill_sell_events[market_pair] = fill_events
 
@@ -819,15 +822,14 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                         del self._maker_to_hedging_trades[maker_order_id]
 
                 try:
-                    maker_exchange_trade_id = self._ongoing_hedging.inverse[order_id]
-                    del self._ongoing_hedging[maker_exchange_trade_id]
+                    self.del_order_from_ongoing_hedging(order_id)
                 except KeyError:
                     self.logger().warning(f"Ongoing hedging not found for order id {order_id}")
 
                 # Delete hedged maker fill event
                 fill_events = []
                 for fill_event in self._order_fill_buy_events[market_pair]:
-                    if fill_event[1].exchange_trade_id in self._ongoing_hedging.keys():
+                    if self.is_fill_event_in_ongoing_hedging(fill_event):
                         fill_events += [fill_event]
                 self._order_fill_buy_events[market_pair] = fill_events
 
@@ -871,29 +873,25 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
 
         return True
 
-    async def check_and_hedge_orders(self, market_pair: MakerTakerMarketPair):
+    async def check_and_hedge_orders(self,
+                                     maker_order_id: str,
+                                     market_pair: MakerTakerMarketPair):
         """
         Look into the stored and un-hedged limit order fill events, and emit orders to hedge them, depending on
         availability of funds on the taker market.
 
         :param market_pair: cross exchange market pair
         """
-        taker_trading_pair = market_pair.taker.trading_pair
-        buy_fill_records = self._order_fill_buy_events.get(market_pair, [])
-        sell_fill_records = self._order_fill_sell_events.get(market_pair, [])
 
-        buy_fill_records = [fill_event for fill_event in buy_fill_records
-                            if (fill_event[1].exchange_trade_id not in self._ongoing_hedging.keys() or
-                                self._ongoing_hedging[fill_event[1].exchange_trade_id] is fill_event[1].exchange_trade_id)]
-        sell_fill_records = [fill_event for fill_event in sell_fill_records
-                             if (fill_event[1].exchange_trade_id not in self._ongoing_hedging.keys() or
-                                 self._ongoing_hedging[fill_event[1].exchange_trade_id] is fill_event[1].exchange_trade_id)]
+        buy_fill_records = self.get_unhedged_buy_records(market_pair)
+        sell_fill_records = self.get_unhedged_sell_records(market_pair)
 
         buy_fill_quantity = sum([fill_event.amount for _, fill_event in buy_fill_records])
         sell_fill_quantity = sum([fill_event.amount for _, fill_event in sell_fill_records])
 
         global s_decimal_zero
 
+        taker_trading_pair = market_pair.taker.trading_pair
         taker_market = market_pair.taker.market
 
         # Convert maker order size (in maker base asset) to taker order size (in taker base asset)
@@ -914,16 +912,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             avg_fill_price = (sum([r.price * r.amount for _, r in buy_fill_records]) /
                               sum([r.amount for _, r in buy_fill_records]))
 
-            maker_order_ids = [r.order_id for _, r in buy_fill_records]
-            maker_exchange_trade_ids = [r.exchange_trade_id for _, r in buy_fill_records]
-
-            if len(maker_order_ids) != 1 or len(maker_exchange_trade_ids) != 1:
-                self.logger().error("Multiple buy maker orders fills")
-                return
-
-            maker_order_id = maker_order_ids[0]
-            maker_exchange_trade_id = maker_exchange_trade_ids[0]
-
+            self.check_multiple_buy_orders(buy_fill_records)
             if self.is_gateway_market(market_pair.taker):
                 order_price = await market_pair.taker.market.get_order_price(
                     taker_trading_pair,
@@ -952,7 +941,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                     quantized_hedge_amount,
                     order_price,
                     maker_order_id,
-                    maker_exchange_trade_id
+                    buy_fill_records
                 )
 
                 if LogOption.MAKER_ORDER_HEDGED in self.logging_options:
@@ -1004,16 +993,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             avg_fill_price = (sum([r.price * r.amount for _, r in sell_fill_records]) /
                               sum([r.amount for _, r in sell_fill_records]))
 
-            maker_order_ids = [r.order_id for _, r in sell_fill_records]
-            maker_exchange_trade_ids = [r.exchange_trade_id for _, r in sell_fill_records]
-
-            if len(maker_order_ids) != 1 or len(maker_exchange_trade_ids) != 1:
-                self.logger().error("Multiple sell maker orders fills")
-                return
-
-            maker_order_id = maker_order_ids[0]
-            maker_exchange_trade_id = maker_exchange_trade_ids[0]
-
+            self.check_multiple_sell_orders(sell_fill_records)
             if self.is_gateway_market(market_pair.taker):
                 order_price = await market_pair.taker.market.get_order_price(
                     taker_trading_pair,
@@ -1042,7 +1022,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                     quantized_hedge_amount,
                     order_price,
                     maker_order_id,
-                    maker_exchange_trade_id
+                    sell_fill_records,
                 )
 
                 if LogOption.MAKER_ORDER_HEDGED in self.logging_options:
@@ -1751,14 +1731,16 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                         f"ask size is 0. Skipping. Check available balance."
                     )
 
-    def place_order(self,
-                    market_pair: MakerTakerMarketPair,
-                    is_buy: bool,
-                    is_maker: bool,  # True for maker order, False for taker order
-                    amount: Decimal,
-                    price: Decimal,
-                    maker_order_id: str = None,
-                    maker_exchange_trade_id: str = None):
+    def place_order(
+        self,
+        market_pair: MakerTakerMarketPair,
+        is_buy: bool,
+        is_maker: bool,  # True for maker order, False for taker order
+        amount: Decimal,
+        price: Decimal,
+        maker_order_id: str = None,
+        fill_records: List[OrderFilledEvent] = None,
+    ):
         expiration_seconds = s_float_nan
         market_info = market_pair.maker if is_maker else market_pair.taker
         # Market orders are not being submitted as taker orders, limit orders are preferred at all times
@@ -1793,7 +1775,8 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         else:
             self._taker_to_maker_order_ids[order_id] = maker_order_id
             self._maker_to_taker_order_ids[maker_order_id] += [order_id]
-            self._ongoing_hedging[maker_exchange_trade_id] = order_id
+            self.set_ongoing_hedging(fill_records, order_id)
+            self._taker_order_timestamps[order_id] = self.current_timestamp
         return order_id
 
     def cancel_maker_order(self, market_pair: MakerTakerMarketPair, order_id: str):
@@ -1827,3 +1810,46 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
     def notify_hb_app(self, msg: str):
         if self._hb_app_notification:
             super().notify_hb_app(msg)
+
+    # ----------------------------------------------------------------------------------------------------------
+    # Helpers
+    def check_multiple_buy_orders(self, fill_records: List[OrderFilledEvent]):
+        maker_order_ids = [r.order_id for _, r in fill_records]
+        if len(set(maker_order_ids)) != 1:
+            self.logger().warning("Multiple buy maker orders")
+
+    def check_multiple_sell_orders(self, fill_records: List[OrderFilledEvent]):
+        maker_order_ids = [r.order_id for _, r in fill_records]
+        if len(set(maker_order_ids)) != 1:
+            self.logger().warning("Multiple sell maker orders")
+
+    def get_unhedged_buy_records(self, market_pair: MakerTakerMarketPair) -> List[OrderFilledEvent]:
+        buy_fill_records = self._order_fill_buy_events.get(market_pair, [])
+        return self.get_unhedged_events(buy_fill_records)
+
+    def get_unhedged_sell_records(self, market_pair: MakerTakerMarketPair) -> List[OrderFilledEvent]:
+        sell_fill_records = self._order_fill_sell_events.get(market_pair, [])
+        return self.get_unhedged_events(sell_fill_records)
+
+    def get_unhedged_events(self, fill_records: List[OrderFilledEvent]) -> List[OrderFilledEvent]:
+        return [
+            fill_event for fill_event in fill_records if (
+                not self.is_fill_event_in_ongoing_hedging(fill_event)
+            )
+        ]
+
+    def is_fill_event_in_ongoing_hedging(self, fill_event: OrderFilledEvent) -> bool:
+        trade_id = fill_event[1].exchange_trade_id
+        for maker_exchange_trade_ids in self._ongoing_hedging:
+            for id in maker_exchange_trade_ids:
+                if trade_id is id:
+                    return True
+        return False
+
+    def set_ongoing_hedging(self, fill_records: List[OrderFilledEvent], order_id: str):
+        maker_exchange_trade_ids = tuple(r.exchange_trade_id for _, r in fill_records)
+        self._ongoing_hedging[maker_exchange_trade_ids] = order_id
+
+    def del_order_from_ongoing_hedging(self, taker_order_id: str):
+        maker_exchange_trade_ids = self._ongoing_hedging.inverse[taker_order_id]
+        del self._ongoing_hedging[maker_exchange_trade_ids]
