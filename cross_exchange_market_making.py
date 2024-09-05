@@ -427,15 +427,19 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         safe_ensure_future(self.check_taker_orders_expiration(timestamp))
 
     async def check_taker_orders_expiration(self, timestamp: float):
-       expired_order_ids = []
-       for order_id, order_timestamp in list(self._taker_order_timestamps.items()):
-           self.logger().info(f"Order {order_id} placed at {order_timestamp}, current time {timestamp}")
-           if timestamp - order_timestamp > 120:  # 120 secondes = 2 minutes
-               expired_order_ids.append(order_id)
+        for order_id, order_timestamp in self._taker_order_timestamp.items():
+            # Ajouter un log pour afficher l'ID de l'ordre, le temps écoulé et le timestamp actuel
+            time_elapsed = timestamp - order_timestamp
+            self.logger().info(f"Order {order_id} placed at {order_timestamp}, current time {timestamp}, "
+                               f"time elapsed: {time_elapsed} seconds.")
+            
+            # Vérifier si le temps écoulé dépasse 120 secondes (2 minutes)
+            if time_elapsed > 120:  # 120 secondes = 2 minutes
+                self.logger().info(f"Order {order_id} has expired. Time elapsed: {time_elapsed}. Handling expiration.")
+                await self.handle_expired_taker_order(order_id)
+            else:
+                self.logger().info(f"Order {order_id} has not yet expired. Time elapsed: {time_elapsed} seconds.")
 
-       for order_id in expired_order_ids:
-           await self.handle_expired_taker_order(order_id)
-           
     async def handle_expired_taker_order(self, order_id: str):
        market_pair = self._market_pair_tracker.get_market_pair_from_order_id(order_id)
        taker_market = market_pair.taker.market
