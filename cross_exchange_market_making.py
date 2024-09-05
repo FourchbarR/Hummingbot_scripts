@@ -426,48 +426,62 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         self.logger().info("Calling check_taker_orders_expiration to verify expired taker orders.")
         safe_ensure_future(self.check_taker_orders_expiration(timestamp))
 
-    async def check_taker_orders_expiration(self, timestamp: float):
-        expired_order_ids = []
-        for order_id, order_timestamp in list(self._taker_order_timestamps.items()):
-            # Vérifie si l'ordre a été rempli avant de surveiller l'expiration
-            order_status = await self.get_order_status(order_id)
-            if order_status.is_filled():
-                self.logger().info(f"Order {order_id} already fully filled. No need to check expiration.")
-                del self._taker_order_timestamps[order_id]
-                continue
+async def check_if_taker_order_expired(self, market_pair, active_order: LimitOrder, current_timestamp: float):
+    """
+    Check if a limit order on the taker exchange has expired (not filled within 2 minutes). If it has expired,
+    cancel the limit order and place a market order of the same amount.
+    
+    :param market_pair: cross exchange market pair
+    :param active_order: the currently active order to check for expiration
+    :param current_timestamp: the current timestamp
+    """
+    order_id = active_order.client_order_id
+    order_timestamp = self._taker_order_timestamps.get(order_id, None)
 
-            # Continue à vérifier si le délai de 2 minutes est dépassé
-            self.logger().info(f"Order {order_id} placed at {order_timestamp}, current time {timestamp}")
-            if timestamp - order_timestamp > 120:  # 120 secondes = 2 minutes
-                expired_order_ids.append(order_id)
+    if order_timestamp is None:
+        # If no timestamp was found, skip
+        return
 
-        for order_id in expired_order_ids:
-            await self.handle_expired_taker_order(order_id)
-
-           
-    async def handle_expired_taker_order(self, order_id: str):
-        market_pair = self._market_pair_tracker.get_market_pair_from_order_id(order_id)
-        taker_market = market_pair.taker.market
-        
-        # Vérifie si l'ordre est encore actif avant de tenter de l'annuler
-        order_status = await self.get_order_status(order_id)
-        if order_status.is_filled() or order_status.is_cancelled():
-            self.logger().info(f"Order {order_id} is already filled or cancelled. Skipping cancel.")
-            del self._taker_order_timestamps[order_id]
-            return
-        
-        self.logger().info(f"Attempting to cancel order {order_id} on taker market")
-        await taker_market.cancel_order(order_id)
-        
-        self.logger().info(f"Order {order_id} expired after 2 minutes. Cancelling and re-executing as market order.")
-        
+    # Check if the order has been filled
+    order_status = await self.get_order_status(order_id)
+    if order_status.is_filled():
+        # If the order has been filled, no need to cancel it
+        self.logger().info(f"Order {order_id} has already been filled. No further action needed.")
         del self._taker_order_timestamps[order_id]
-        if order_id in self._taker_to_maker_order_ids:
-            maker_order_id = self._taker_to_maker_order_ids[order_id]
-            fill_records = self.get_unhedged_buy_records(market_pair) if taker_market.is_buy_order(order_id) else self.get_unhedged_sell_records(market_pair)
-            
-            amount = sum([fill_event.amount for _, fill_event in fill_records])
-            await taker_market.create_market_order(taker_market.trading_pair, taker_market.is_buy_order(order_id), amount)
+        return
+
+    # Check if more than 2 minutes have passed since the order was placed
+    if current_timestamp - order_timestamp > 120:  # 120 seconds = 2 minutes
+        self.logger().info(f"Order {order_id} has expired after 2 minutes. Cancelling and placing a market order.")
+
+        # Cancel the expired limit order
+        await market_pair.taker.market.cancel_order(order_id)
+        del self._taker_order_timestamps[order_id]
+
+        # Place a new market order with the same amount
+        amount = active_order.quantity
+        is_buy = active_order.is_buy
+        await market_pair.taker.market.create_market_order(
+            trading_pair=market_pair.taker.trading_pair,
+            is_buy=is_buy,
+            amount=amount
+        )
+
+        self.logger().info(f"Market order placed to replace expired limit order {order_id}.")
+    else:
+        self.logger().info(f"Order {order_id} is still active and has not yet expired.")
+
+async def check_taker_orders_expiration(self, timestamp: float):
+    """
+    Check all active taker orders to see if they have expired (been active for more than 2 minutes).
+    If expired, cancel the limit order and replace it with a market order.
+    """
+    for order_id, order_timestamp in list(self._taker_order_timestamps.items()):
+        market_pair = self._market_pair_tracker.get_market_pair_from_order_id(order_id)
+        active_order = self._sb_order_tracker.get_limit_order(market_pair.taker, order_id)
+
+        if active_order:
+            await self.check_if_taker_order_expired(market_pair, active_order, timestamp)
 
 
     async def main(self, timestamp: float):
