@@ -427,11 +427,16 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         safe_ensure_future(self.check_taker_order_expiry(timestamp))
 
     async def check_taker_order_expiry(self, timestamp: float):
+        # Ne pas continuer si le dictionnaire des ordres est vide
+        if not self._taker_order_timestamps:
+            self.logger().info("No active taker orders to check for expiry.")
+            return
+    
         taker_order_timeout = 120  # Time in seconds before converting limit order to market order
         orders_to_cancel = []
-
+    
         self.logger().info(f"Checking for expired taker orders at timestamp {timestamp}")
-
+    
         # Loop through taker orders and check if they have expired
         for order_id, placed_timestamp in list(self._taker_order_timestamps.items()):
             elapsed_time = timestamp - placed_timestamp
@@ -440,13 +445,17 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             if elapsed_time > taker_order_timeout:
                 self.logger().info(f"Taker order {order_id} has expired (timeout={taker_order_timeout}s). Marking for cancellation.")
                 orders_to_cancel.append(order_id)
-
+    
         # Cancel and replace each expired limit order with a market order
         for order_id in orders_to_cancel:
             self.logger().info(f"Attempting to cancel and replace expired taker order {order_id} with a market order.")
             await self.replace_taker_limit_with_market_order(order_id)
             del self._taker_order_timestamps[order_id]  # Remove the order from tracking
             self.logger().info(f"Taker order {order_id} has been replaced with a market order.")
+    
+        # Log if there are no remaining taker orders after the check
+        if not self._taker_order_timestamps:
+            self.logger().info("No more taker orders are pending.")
 
     async def replace_taker_limit_with_market_order(self, order_id: str):
         self.logger().info(f"Replacing taker limit order {order_id} with a market order.")
