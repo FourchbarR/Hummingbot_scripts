@@ -135,8 +135,9 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         self._maker_to_hedging_trades = {}
 
         all_markets = list(self._maker_markets | self._taker_markets)
-
+        
         self.add_markets(all_markets)
+        self._taker_order_timestamps = {}
 
     @property
     def order_amount(self):
