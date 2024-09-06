@@ -430,26 +430,26 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         taker_order_timeout = 120  # Time in seconds before converting limit order to market order
         orders_to_cancel = []
 
-        self.logger().debug(f"Checking for expired taker orders at timestamp {timestamp}")
+        self.logger().info(f"Checking for expired taker orders at timestamp {timestamp}")
 
         # Loop through taker orders and check if they have expired
         for order_id, placed_timestamp in list(self._taker_order_timestamps.items()):
             elapsed_time = timestamp - placed_timestamp
-            self.logger().debug(f"Taker order {order_id} has been open for {elapsed_time} seconds.")
+            self.logger().info(f"Taker order {order_id} has been open for {elapsed_time} seconds.")
             
             if elapsed_time > taker_order_timeout:
-                self.logger().debug(f"Taker order {order_id} has expired (timeout={taker_order_timeout}s). Marking for cancellation.")
+                self.logger().info(f"Taker order {order_id} has expired (timeout={taker_order_timeout}s). Marking for cancellation.")
                 orders_to_cancel.append(order_id)
 
         # Cancel and replace each expired limit order with a market order
         for order_id in orders_to_cancel:
-            self.logger().debug(f"Attempting to cancel and replace expired taker order {order_id} with a market order.")
+            self.logger().info(f"Attempting to cancel and replace expired taker order {order_id} with a market order.")
             await self.replace_taker_limit_with_market_order(order_id)
             del self._taker_order_timestamps[order_id]  # Remove the order from tracking
-            self.logger().debug(f"Taker order {order_id} has been replaced with a market order.")
+            self.logger().info(f"Taker order {order_id} has been replaced with a market order.")
 
     async def replace_taker_limit_with_market_order(self, order_id: str):
-        self.logger().debug(f"Replacing taker limit order {order_id} with a market order.")
+        self.logger().info(f"Replacing taker limit order {order_id} with a market order.")
         
         market_pair = self._market_pair_tracker.get_market_pair_from_order_id(order_id)
         
@@ -458,7 +458,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             return
 
         # Cancel the limit order
-        self.logger().debug(f"Cancelling taker limit order {order_id} on exchange {market_pair.taker.market.display_name}.")
+        self.logger().info(f"Cancelling taker limit order {order_id} on exchange {market_pair.taker.market.display_name}.")
         self.cancel_order(market_pair.taker, order_id)
         
         # Fetch the corresponding amount and direction (buy/sell) from the original order
@@ -468,18 +468,18 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             return
 
         # Log the original order details
-        self.logger().debug(f"Original taker order {order_id}: is_buy={original_order.is_buy}, quantity={original_order.quantity}")
+        self.logger().info(f"Original taker order {order_id}: is_buy={original_order.is_buy}, quantity={original_order.quantity}")
 
         # Place a market order with the same parameters
         if original_order.is_buy:
-            self.logger().debug(f"Placing a market buy order on {market_pair.taker.market.display_name} for quantity {original_order.quantity}.")
+            self.logger().info(f"Placing a market buy order on {market_pair.taker.market.display_name} for quantity {original_order.quantity}.")
             self.buy_with_specific_market(
                 market_pair.taker, 
                 original_order.quantity, 
                 order_type=OrderType.MARKET
             )
         else:
-            self.logger().debug(f"Placing a market sell order on {market_pair.taker.market.display_name} for quantity {original_order.quantity}.")
+            self.logger().info(f"Placing a market sell order on {market_pair.taker.market.display_name} for quantity {original_order.quantity}.")
             self.sell_with_specific_market(
                 market_pair.taker, 
                 original_order.quantity, 
