@@ -556,9 +556,15 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         """
         Returns True if there is no outstanding unfilled order.
         """
+        self.logger().info(f"Checking if ready for new trades. Ongoing hedging count: {len(self._ongoing_hedging.keys())}")
+        
         if len(self._ongoing_hedging.keys()) > 0:
+            self.logger().info("Not ready for new trades: There are ongoing hedging trades.")
             return False
+        
+        self.logger().info("Ready for new trades.")
         return True
+
 
     async def apply_gateway_transaction_cancel_interval(self):
         # XXX (martin_kou): Concurrent cancellations are not supported before the nonce architecture is fixed.
