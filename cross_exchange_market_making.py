@@ -432,7 +432,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             self.logger().info("No active taker orders to check for expiry.")
             return
     
-        taker_order_timeout = 120  # Time in seconds before converting limit order to market order
+        taker_order_timeout = 20  # Time in seconds before converting limit order to market order
         orders_to_cancel = []
     
         self.logger().info(f"Checking for expired taker orders at timestamp {timestamp}")
