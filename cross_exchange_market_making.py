@@ -465,44 +465,44 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         if market_pair is None:
             self.logger().warning(f"Taker limit order {order_id} not found in market pair tracker. Cannot replace it.")
             return
-
+    
         # Cancel the limit order
         self.logger().info(f"Cancelling taker limit order {order_id} on exchange {market_pair.taker.market.display_name}.")
-        self.cancel_order(market_pair.taker, order_id)
+        await self.cancel_order(market_pair.taker, order_id)
         
         # Fetch the corresponding amount and direction (buy/sell) from the original order
         original_order = self._sb_order_tracker.get_limit_order(market_pair.taker, order_id)
         if original_order is None:
             self.logger().warning(f"Original taker order {order_id} not found in order tracker.")
             return
-
+    
         # Log the original order details
         self.logger().info(f"Original taker order {order_id}: is_buy={original_order.is_buy}, quantity={original_order.quantity}")
-
+    
         # Place a market order with the same parameters
         if original_order.is_buy:
             self.logger().info(f"Placing a market buy order on {market_pair.taker.market.display_name} for quantity {original_order.quantity}.")
-            self.buy_with_specific_market(
+            await self.buy_with_specific_market(
                 market_pair.taker, 
                 original_order.quantity, 
                 order_type=OrderType.MARKET
             )
         else:
             self.logger().info(f"Placing a market sell order on {market_pair.taker.market.display_name} for quantity {original_order.quantity}.")
-            self.sell_with_specific_market(
+            await self.sell_with_specific_market(
                 market_pair.taker, 
                 original_order.quantity, 
                 order_type=OrderType.MARKET
             )
-
-        self.logger().info(f"Successfully replaced taker limit order {order_id} with a market order.")
+    
+        self.logger().info(f"Taker order {order_id} has been replaced with a market order.")
         
         # Remove the order from tracking
         del self._taker_order_timestamps[order_id]
-
+    
         # Indicate that the bot is ready for new trades
         if self.ready_for_new_trades():
-            await self.check_and_create_new_orders(market_pair, False, False)
+            safe_ensure_future(self.check_and_create_new_orders(market_pair, False, False))  # Run in background to avoid blocking
 
     async def main(self, timestamp: float):
         try:
