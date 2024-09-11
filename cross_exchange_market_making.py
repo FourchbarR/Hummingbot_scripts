@@ -476,38 +476,64 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             self.logger().warning(f"Original taker order {order_id} not found in order tracker.")
             return
     
+        # Log the original order details
+        self.logger().info(f"Original taker order {order_id}: is_buy={original_order.is_buy}, quantity={original_order.quantity}")
+    
         # Place a market order with the same parameters
         if original_order.is_buy:
             self.logger().info(f"Placing a market buy order on {market_pair.taker.market.display_name} for quantity {original_order.quantity}.")
-            new_order_id = await self.buy_with_specific_market(
+            await self.buy_with_specific_market(
                 market_pair.taker, 
                 original_order.quantity, 
                 order_type=OrderType.MARKET
             )
         else:
             self.logger().info(f"Placing a market sell order on {market_pair.taker.market.display_name} for quantity {original_order.quantity}.")
-            new_order_id = await self.sell_with_specific_market(
+            await self.sell_with_specific_market(
                 market_pair.taker, 
                 original_order.quantity, 
                 order_type=OrderType.MARKET
             )
     
-        # Update order mappings after replacing with market order
-        del self._taker_order_timestamps[order_id]  # Remove expired taker order timestamp
-        if order_id in self._taker_to_maker_order_ids:
-            maker_order_id = self._taker_to_maker_order_ids.pop(order_id)
-            if maker_order_id in self._maker_to_taker_order_ids:
-                self._maker_to_taker_order_ids[maker_order_id].remove(order_id)
+        self.logger().info(f"Successfully replaced taker limit order {order_id} with a market order.")
     
-        # Update for the new market order, if needed
-        self._taker_to_maker_order_ids[new_order_id] = maker_order_id
-        self._maker_to_taker_order_ids[maker_order_id].append(new_order_id)
-    
-        self.logger().info(f"Successfully replaced taker limit order {order_id} with a market order (new order_id: {new_order_id}).")
+        # Clean up mappings and state after replacing the taker limit order with a market order
+        self.logger().info(f"Cleaning up state after replacing the taker limit order {order_id} with a market order.")
         
-        # Re-start the market-making process on the maker side
-        await self.check_and_create_new_orders(market_pair, has_active_bid=False, has_active_ask=False)
+        # Remove the completed taker order
+        del self._taker_to_maker_order_ids[order_id]
     
+        # Get all active taker order ids for the maker order id
+        maker_order_id = self._taker_to_maker_order_ids.get(order_id)
+        active_taker_ids = set(self._taker_to_maker_order_ids.keys()).intersection(set(
+            self._maker_to_taker_order_ids[maker_order_id]))
+        
+        if len(active_taker_ids) == 0:
+            # Was the maker order fully filled?
+            maker_order_ids = list(order_id for market, limit_order, order_id in self.active_maker_limit_orders)
+            if maker_order_id not in maker_order_ids:
+                # Remove the completed fully hedged maker order
+                del self._maker_to_taker_order_ids[maker_order_id]
+                del self._maker_to_hedging_trades[maker_order_id]
+    
+        # Clean up ongoing hedging
+        try:
+            self.del_order_from_ongoing_hedging(order_id)
+        except KeyError:
+            self.logger().warning(f"Ongoing hedging not found for order id {order_id}")
+    
+        # Delete hedged maker fill events if necessary
+        fill_events = []
+        for fill_event in self._order_fill_sell_events[market_pair]:
+            if self.is_fill_event_in_ongoing_hedging(fill_event):
+                fill_events += [fill_event]
+        self._order_fill_sell_events[market_pair] = fill_events
+    
+        # Cleanup maker fill events - no longer needed to create taker orders if all fills were hedged
+        if len(self._order_fill_sell_events[market_pair]) == 0:
+            del self._order_fill_sell_events[market_pair]
+
+
     async def main(self, timestamp: float):
         try:
             # Calculate a mapping from market pair to list of active limit orders on the market.
