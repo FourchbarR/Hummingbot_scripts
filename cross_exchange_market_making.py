@@ -452,9 +452,6 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             await self.replace_taker_limit_with_market_order(order_id)
             del self._taker_order_timestamps[order_id]  # Remove the order from tracking
             self.logger().info(f"Taker order {order_id} has been replaced with a market order.")
-            self.logger().debug(f"State after market order: _ongoing_hedging={self._ongoing_hedging}, "
-                        f"_maker_to_taker_order_ids={self._maker_to_taker_order_ids}, "
-                        f"_taker_to_maker_order_ids={self._taker_to_maker_order_ids}")
     
         # Log if there are no remaining taker orders after the check
         if not self._taker_order_timestamps:
@@ -468,7 +465,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         if market_pair is None:
             self.logger().warning(f"Taker limit order {order_id} not found in market pair tracker. Cannot replace it.")
             return
-
+    
         # Cancel the limit order
         self.logger().info(f"Cancelling taker limit order {order_id} on exchange {market_pair.taker.market.display_name}.")
         self.cancel_order(market_pair.taker, order_id)
@@ -478,10 +475,10 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         if original_order is None:
             self.logger().warning(f"Original taker order {order_id} not found in order tracker.")
             return
-
+    
         # Log the original order details
         self.logger().info(f"Original taker order {order_id}: is_buy={original_order.is_buy}, quantity={original_order.quantity}")
-
+    
         # Place a market order with the same parameters
         if original_order.is_buy:
             self.logger().info(f"Placing a market buy order on {market_pair.taker.market.display_name} for quantity {original_order.quantity}.")
@@ -497,9 +494,30 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 original_order.quantity, 
                 order_type=OrderType.MARKET
             )
-
+    
         self.logger().info(f"Successfully replaced taker limit order {order_id} with a market order.")
         
+        # Clean up mappings and ongoing hedging
+        maker_order_id = self._taker_to_maker_order_ids.get(order_id)
+        if maker_order_id:
+            # Remove the taker order from _taker_to_maker_order_ids
+            del self._taker_to_maker_order_ids[order_id]
+            
+            # Remove the maker order ID from _maker_to_taker_order_ids
+            if maker_order_id in self._maker_to_taker_order_ids:
+                self._maker_to_taker_order_ids[maker_order_id].remove(order_id)
+                if len(self._maker_to_taker_order_ids[maker_order_id]) == 0:
+                    del self._maker_to_taker_order_ids[maker_order_id]
+            
+            # Clean up from ongoing hedging
+            try:
+                self.del_order_from_ongoing_hedging(order_id)
+            except KeyError:
+                self.logger().warning(f"Ongoing hedging not found for order id {order_id}")
+    
+        self.logger().info(f"Order mappings and ongoing hedging cleaned up for taker order {order_id}.")
+
+
     async def main(self, timestamp: float):
         try:
             # Calculate a mapping from market pair to list of active limit orders on the market.
