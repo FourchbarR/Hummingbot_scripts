@@ -452,6 +452,9 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             await self.replace_taker_limit_with_market_order(order_id)
             del self._taker_order_timestamps[order_id]  # Remove the order from tracking
             self.logger().info(f"Taker order {order_id} has been replaced with a market order.")
+            self.logger().debug(f"State after market order: _ongoing_hedging={self._ongoing_hedging}, "
+                        f"_maker_to_taker_order_ids={self._maker_to_taker_order_ids}, "
+                        f"_taker_to_maker_order_ids={self._taker_to_maker_order_ids}")
     
         # Log if there are no remaining taker orders after the check
         if not self._taker_order_timestamps:
@@ -496,16 +499,6 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             )
 
         self.logger().info(f"Successfully replaced taker limit order {order_id} with a market order.")
-        
-        # Trigger the normal market-making flow again
-        await self.main(self.current_timestamp)
-        
-        # Check if the strategy is ready for new trades
-        if self.ready_for_new_trades():
-            self.logger().info("Ready for new trades. Resuming normal operation.")
-            await self.main(self.current_timestamp)
-        else:
-            self.logger().info("Not ready for new trades yet. Waiting for ongoing hedging to complete.")
         
     async def main(self, timestamp: float):
         try:
