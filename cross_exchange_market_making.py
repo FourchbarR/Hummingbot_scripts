@@ -479,17 +479,32 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         # Log des détails de l'ordre initial
         self.logger().info(f"Original taker order {order_id}: is_buy={original_order.is_buy}, quantity={original_order.quantity}")
         
-        # Vérifier combien a déjà été rempli
-        quantity_filled = original_order.filled_quantity or Decimal("0")
-        quantity_remaining = original_order.quantity - quantity_filled
+        # Vérification que les valeurs ne sont pas None
+        if original_order.quantity is None:
+            self.logger().error(f"Original order quantity is None for order {order_id}. This should not happen.")
+            return
+        if original_order.filled_quantity is None:
+            self.logger().info(f"Order {order_id} has not been filled at all, executing full market order.")
+            quantity_filled = Decimal("0")
+        else:
+            quantity_filled = original_order.filled_quantity
     
-        # Si rien ne reste, on arrête
+        # Calcul de la quantité restante (ici on s'assure que l'opération est bien effectuée même si c'est 100% non rempli)
+        try:
+            quantity_remaining = original_order.quantity - quantity_filled
+        except Exception as e:
+            self.logger().error(f"Error calculating remaining quantity for order {order_id}: {e}")
+            return
+    
+        # Si rien ne reste, on arrête (cela ne devrait pas arriver dans ce cas)
         if quantity_remaining <= Decimal("0"):
             self.logger().info(f"No remaining quantity to hedge for taker order {order_id}. Already fully filled.")
             return
     
-        self.logger().info(f"Placing a market order on {market_pair.taker.market.display_name} for the remaining quantity: {quantity_remaining}.")
-    
+        # Ici, on vérifie si on est bien dans le cas où 100% de l'ordre doit être exécuté en market
+        if quantity_remaining == original_order.quantity:
+            self.logger().info(f"Full quantity {quantity_remaining} will be executed as a market order on the taker exchange.")
+        
         # Placement de l'ordre market
         if original_order.is_buy:
             self.logger().info(f"Placing a market buy order for {quantity_remaining} {market_pair.taker.base_asset}.")
@@ -527,6 +542,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             self.logger().info(f"Removed replaced taker order {order_id} from _taker_order_timestamps.")
     
         self.logger().info(f"Successfully replaced taker limit order {order_id} with a market order for {quantity_remaining}.")
+
     
     async def main(self, timestamp: float):
         try:
