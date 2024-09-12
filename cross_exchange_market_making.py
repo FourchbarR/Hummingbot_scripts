@@ -466,7 +466,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             self.logger().warning(f"Taker limit order {order_id} not found in market pair tracker. Cannot replace it.")
             return
     
-        # Cancel the limit order
+        # Cancel the limit order on the taker exchange
         self.logger().info(f"Cancelling taker limit order {order_id} on exchange {market_pair.taker.market.display_name}.")
         self.cancel_order(market_pair.taker, order_id)
         
@@ -478,25 +478,36 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
     
         # Log the original order details
         self.logger().info(f"Original taker order {order_id}: is_buy={original_order.is_buy}, quantity={original_order.quantity}")
+        
+        # Check how much has already been filled on the taker side
+        quantity_filled = original_order.filled_quantity or Decimal("0")
+        quantity_remaining = original_order.quantity - quantity_filled
     
-        # Place a market order with the same parameters
+        # If the remaining quantity is zero or less, nothing to do
+        if quantity_remaining <= Decimal("0"):
+            self.logger().info(f"No remaining quantity to hedge for taker order {order_id}. Already fully filled.")
+            return
+    
+        self.logger().info(f"Placing a market order on {market_pair.taker.market.display_name} for the remaining quantity: {quantity_remaining}.")
+    
+        # Place a market order for the remaining quantity on the taker exchange
         if original_order.is_buy:
-            self.logger().info(f"Placing a market buy order on {market_pair.taker.market.display_name} for quantity {original_order.quantity}.")
+            self.logger().info(f"Placing a market buy order on {market_pair.taker.market.display_name} for quantity {quantity_remaining}.")
             self.buy_with_specific_market(
                 market_pair.taker, 
-                original_order.quantity, 
+                quantity_remaining, 
                 order_type=OrderType.MARKET
             )
         else:
-            self.logger().info(f"Placing a market sell order on {market_pair.taker.market.display_name} for quantity {original_order.quantity}.")
+            self.logger().info(f"Placing a market sell order on {market_pair.taker.market.display_name} for quantity {quantity_remaining}.")
             self.sell_with_specific_market(
                 market_pair.taker, 
-                original_order.quantity, 
+                quantity_remaining, 
                 order_type=OrderType.MARKET
             )
     
-        self.logger().info(f"Successfully replaced taker limit order {order_id} with a market order.")
-        
+        self.logger().info(f"Successfully replaced taker limit order {order_id} with a market order for the remaining quantity: {quantity_remaining}.")
+    
         # Clean up mappings and ongoing hedging
         maker_order_id = self._taker_to_maker_order_ids.get(order_id)
         if maker_order_id:
