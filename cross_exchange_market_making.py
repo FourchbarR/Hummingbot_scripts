@@ -489,22 +489,18 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         else:
             quantity_filled = original_order.filled_quantity
     
-        # Calcul de la quantité restante (ici on s'assure que l'opération est bien effectuée même si c'est 100% non rempli)
+        # Calcul de la quantité restante
         try:
             quantity_remaining = original_order.quantity - quantity_filled
         except Exception as e:
             self.logger().error(f"Error calculating remaining quantity for order {order_id}: {e}")
             return
     
-        # Si rien ne reste, on arrête (cela ne devrait pas arriver dans ce cas)
+        # Si rien ne reste, on arrête
         if quantity_remaining <= Decimal("0"):
             self.logger().info(f"No remaining quantity to hedge for taker order {order_id}. Already fully filled.")
             return
     
-        # Ici, on vérifie si on est bien dans le cas où 100% de l'ordre doit être exécuté en market
-        if quantity_remaining == original_order.quantity:
-            self.logger().info(f"Full quantity {quantity_remaining} will be executed as a market order on the taker exchange.")
-        
         # Placement de l'ordre market
         if original_order.is_buy:
             self.logger().info(f"Placing a market buy order for {quantity_remaining} {market_pair.taker.base_asset}.")
@@ -542,8 +538,10 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             self.logger().info(f"Removed replaced taker order {order_id} from _taker_order_timestamps.")
     
         self.logger().info(f"Successfully replaced taker limit order {order_id} with a market order for {quantity_remaining}.")
-
     
+        # Appeler hedge_tasks_cleanup une fois tout le processus terminé
+        self.hedge_tasks_cleanup()  # Appeler après la couverture
+
     async def main(self, timestamp: float):
         try:
             # Calculate a mapping from market pair to list of active limit orders on the market.
@@ -786,7 +784,6 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
 
     def did_cancel_order(self, order_canceled_event: OrderCancelledEvent):
         if order_canceled_event.order_id in self._taker_to_maker_order_ids.keys():
-            self.hedge_tasks_cleanup()  # Ajouter ici
             self.handle_unfilled_taker_order(order_canceled_event)
 
     def did_fail_order(self, order_failed_event: MarketOrderFailureEvent):
