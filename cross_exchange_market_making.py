@@ -773,11 +773,21 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         if order_canceled_event.order_id in self._taker_to_maker_order_ids.keys():
             self.hedge_tasks_cleanup()  # Ajouter ici
             self.handle_unfilled_taker_order(order_canceled_event)
+    
+            # Retirer l'ordre annulé du suivi
+        if order_canceled_event.order_id in self._taker_order_timestamps:
+            del self._taker_order_timestamps[order_canceled_event.order_id]
+            self.logger().info(f"Removed canceled taker order {order_canceled_event.order_id} from _taker_order_timestamps.")
 
     def did_fail_order(self, order_failed_event: MarketOrderFailureEvent):
         if order_failed_event.order_id in self._taker_to_maker_order_ids.keys():
             self.hedge_tasks_cleanup()  # Ajouter ici
             self.handle_unfilled_taker_order(order_failed_event)
+            
+        # Retirer l'ordre échoué du suivi
+        if order_failed_event.order_id in self._taker_order_timestamps:
+            del self._taker_order_timestamps[order_failed_event.order_id]
+            self.logger().info(f"Removed failed taker order {order_failed_event.order_id} from _taker_order_timestamps.")
 
     def did_expire_order(self, order_expired_event: OrderExpiredEvent):
         if order_expired_event.order_id in self._taker_to_maker_order_ids.keys():
@@ -849,6 +859,11 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 # Cleanup maker fill events - no longer needed to create taker orders if all fills were hedged
                 if len(self._order_fill_sell_events[market_pair]) == 0:
                     del self._order_fill_sell_events[market_pair]
+
+        order_id = order_completed_event.order_id
+        if order_id in self._taker_order_timestamps:
+            del self._taker_order_timestamps[order_id]  # Supprimer l'ordre complété du suivi
+            self.logger().info(f"Removed completed taker buy order {order_id} from _taker_order_timestamps.")
         self.hedge_tasks_cleanup()  # Ajouter ici après avoir traité l'événement
         
     def did_complete_sell_order(self, order_completed_event: SellOrderCompletedEvent):
@@ -917,6 +932,11 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 # Cleanup maker fill events - no longer needed to create taker orders if all fills were hedged
                 if len(self._order_fill_buy_events[market_pair]) == 0:
                     del self._order_fill_buy_events[market_pair]
+                    
+        order_id = order_completed_event.order_id
+        if order_id in self._taker_order_timestamps:
+            del self._taker_order_timestamps[order_id]  # Supprimer l'ordre complété du suivi
+            self.logger().info(f"Removed completed taker sell order {order_id} from _taker_order_timestamps.")
         self.hedge_tasks_cleanup()  # Ajouter ici après avoir traité l'événement
         
     async def check_if_price_has_drifted(self, market_pair: MakerTakerMarketPair, active_order: LimitOrder):
