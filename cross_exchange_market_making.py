@@ -771,14 +771,17 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
 
     def did_cancel_order(self, order_canceled_event: OrderCancelledEvent):
         if order_canceled_event.order_id in self._taker_to_maker_order_ids.keys():
+            self.hedge_tasks_cleanup()  # Ajouter ici
             self.handle_unfilled_taker_order(order_canceled_event)
 
     def did_fail_order(self, order_failed_event: MarketOrderFailureEvent):
         if order_failed_event.order_id in self._taker_to_maker_order_ids.keys():
+            self.hedge_tasks_cleanup()  # Ajouter ici
             self.handle_unfilled_taker_order(order_failed_event)
 
     def did_expire_order(self, order_expired_event: OrderExpiredEvent):
         if order_expired_event.order_id in self._taker_to_maker_order_ids.keys():
+            self.hedge_tasks_cleanup()  # Ajouter ici
             self.handle_unfilled_taker_order(order_expired_event)
 
     def did_complete_buy_order(self, order_completed_event: BuyOrderCompletedEvent):
@@ -846,7 +849,8 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 # Cleanup maker fill events - no longer needed to create taker orders if all fills were hedged
                 if len(self._order_fill_sell_events[market_pair]) == 0:
                     del self._order_fill_sell_events[market_pair]
-
+        self.hedge_tasks_cleanup()  # Ajouter ici après avoir traité l'événement
+        
     def did_complete_sell_order(self, order_completed_event: SellOrderCompletedEvent):
         """
         Output log message when a ask order (on maker side or taker side) is completely taken.
@@ -913,7 +917,8 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 # Cleanup maker fill events - no longer needed to create taker orders if all fills were hedged
                 if len(self._order_fill_buy_events[market_pair]) == 0:
                     del self._order_fill_buy_events[market_pair]
-
+        self.hedge_tasks_cleanup()  # Ajouter ici après avoir traité l'événement
+        
     async def check_if_price_has_drifted(self, market_pair: MakerTakerMarketPair, active_order: LimitOrder):
         """
         Given a currently active limit order on maker side, check if its current price is still valid, based on the
