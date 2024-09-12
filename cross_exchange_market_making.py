@@ -458,7 +458,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             self.logger().info("No more taker orders are pending.")
 
     async def replace_taker_limit_with_market_order(self, order_id: str):
-        self.logger().info(f"Replacing taker limit order {order_id} with a market order.")
+        self.logger().info(f"Starting process to replace taker limit order {order_id} with a market order.")
         
         market_pair = self._market_pair_tracker.get_market_pair_from_order_id(order_id)
         
@@ -466,69 +466,68 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             self.logger().warning(f"Taker limit order {order_id} not found in market pair tracker. Cannot replace it.")
             return
     
-        # Cancel the limit order on the taker exchange
-        self.logger().info(f"Cancelling taker limit order {order_id} on exchange {market_pair.taker.market.display_name}.")
+        # Annulation de l'ordre limit
+        self.logger().info(f"Attempting to cancel taker limit order {order_id} on exchange {market_pair.taker.market.display_name}.")
         self.cancel_order(market_pair.taker, order_id)
         
-        # Fetch the corresponding amount and direction (buy/sell) from the original order
+        # Récupération des détails de l'ordre original
         original_order = self._sb_order_tracker.get_limit_order(market_pair.taker, order_id)
         if original_order is None:
             self.logger().warning(f"Original taker order {order_id} not found in order tracker.")
             return
     
-        # Log the original order details
+        # Log des détails de l'ordre initial
         self.logger().info(f"Original taker order {order_id}: is_buy={original_order.is_buy}, quantity={original_order.quantity}")
         
-        # Check how much has already been filled on the taker side
+        # Vérifier combien a déjà été rempli
         quantity_filled = original_order.filled_quantity or Decimal("0")
         quantity_remaining = original_order.quantity - quantity_filled
     
-        # If the remaining quantity is zero or less, nothing to do
+        # Si rien ne reste, on arrête
         if quantity_remaining <= Decimal("0"):
             self.logger().info(f"No remaining quantity to hedge for taker order {order_id}. Already fully filled.")
             return
     
         self.logger().info(f"Placing a market order on {market_pair.taker.market.display_name} for the remaining quantity: {quantity_remaining}.")
     
-        # Place a market order for the remaining quantity on the taker exchange
+        # Placement de l'ordre market
         if original_order.is_buy:
-            self.logger().info(f"Placing a market buy order on {market_pair.taker.market.display_name} for quantity {quantity_remaining}.")
+            self.logger().info(f"Placing a market buy order for {quantity_remaining} {market_pair.taker.base_asset}.")
             self.buy_with_specific_market(
                 market_pair.taker, 
                 quantity_remaining, 
                 order_type=OrderType.MARKET
             )
         else:
-            self.logger().info(f"Placing a market sell order on {market_pair.taker.market.display_name} for quantity {quantity_remaining}.")
+            self.logger().info(f"Placing a market sell order for {quantity_remaining} {market_pair.taker.base_asset}.")
             self.sell_with_specific_market(
                 market_pair.taker, 
                 quantity_remaining, 
                 order_type=OrderType.MARKET
             )
     
-        self.logger().info(f"Successfully replaced taker limit order {order_id} with a market order for the remaining quantity: {quantity_remaining}.")
-    
-        # Clean up mappings and ongoing hedging
+        # Nettoyage des mappings
         maker_order_id = self._taker_to_maker_order_ids.get(order_id)
         if maker_order_id:
-            # Remove the taker order from _taker_to_maker_order_ids
             del self._taker_to_maker_order_ids[order_id]
             
-            # Remove the maker order ID from _maker_to_taker_order_ids
             if maker_order_id in self._maker_to_taker_order_ids:
                 self._maker_to_taker_order_ids[maker_order_id].remove(order_id)
                 if len(self._maker_to_taker_order_ids[maker_order_id]) == 0:
                     del self._maker_to_taker_order_ids[maker_order_id]
             
-            # Clean up from ongoing hedging
             try:
                 self.del_order_from_ongoing_hedging(order_id)
             except KeyError:
                 self.logger().warning(f"Ongoing hedging not found for order id {order_id}")
+        
+        # Supprimer de _taker_order_timestamps après placement de l'ordre market
+        if order_id in self._taker_order_timestamps:
+            del self._taker_order_timestamps[order_id]
+            self.logger().info(f"Removed replaced taker order {order_id} from _taker_order_timestamps.")
     
-        self.logger().info(f"Order mappings and ongoing hedging cleaned up for taker order {order_id}.")
-
-
+        self.logger().info(f"Successfully replaced taker limit order {order_id} with a market order for {quantity_remaining}.")
+    
     async def main(self, timestamp: float):
         try:
             # Calculate a mapping from market pair to list of active limit orders on the market.
@@ -773,11 +772,6 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         if order_canceled_event.order_id in self._taker_to_maker_order_ids.keys():
             self.hedge_tasks_cleanup()  # Ajouter ici
             self.handle_unfilled_taker_order(order_canceled_event)
-    
-            # Retirer l'ordre annulé du suivi
-        if order_canceled_event.order_id in self._taker_order_timestamps:
-            del self._taker_order_timestamps[order_canceled_event.order_id]
-            self.logger().info(f"Removed canceled taker order {order_canceled_event.order_id} from _taker_order_timestamps.")
 
     def did_fail_order(self, order_failed_event: MarketOrderFailureEvent):
         if order_failed_event.order_id in self._taker_to_maker_order_ids.keys():
