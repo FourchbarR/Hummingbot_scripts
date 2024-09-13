@@ -465,6 +465,21 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         if market_pair is None:
             self.logger().warning(f"Taker limit order {order_id} not found in market pair tracker. Cannot replace it.")
             return
+        # Récupérer l'ordre original et vérifier s'il est déjà rempli à 100%
+        original_order = self._sb_order_tracker.get_limit_order(market_pair.taker, order_id)
+        if original_order is None:
+            self.logger().warning(f"Original taker order {order_id} not found in order tracker.")
+            return
+    
+        # Si l'ordre est déjà rempli à 100%, ne pas le remplacer
+        if original_order.filled_quantity == original_order.quantity:
+            self.logger().info(f"Taker limit order {order_id} is already fully filled. No need to replace it with a market order.")
+            
+            # Supprimer l'ordre des timestamps
+            if order_id in self._taker_order_timestamps:
+                del self._taker_order_timestamps[order_id]
+                self.logger().info(f"Timer for taker order {order_id} stopped due to full fill.")
+            return
     
         # Cancel the limit order
         self.logger().info(f"Cancelling taker limit order {order_id} on exchange {market_pair.taker.market.display_name}.")
@@ -516,7 +531,6 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 self.logger().warning(f"Ongoing hedging not found for order id {order_id}")
     
         self.logger().info(f"Order mappings and ongoing hedging cleaned up for taker order {order_id}.")
-        self.hedge_tasks_cleanup()  # Appeler après la couverture
 
 
     async def main(self, timestamp: float):
@@ -778,7 +792,15 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         """
         order_id = order_completed_event.order_id
         market_pair = self._market_pair_tracker.get_market_pair_from_order_id(order_id)
-
+        if market_pair is not None:
+            if order_id in self._taker_to_maker_order_ids.keys():
+                self.logger().info(f"Taker buy order {order_id} has been fully filled.")
+                
+                # Supprimer l'ordre des timestamps des taker orders
+                if order_id in self._taker_order_timestamps:
+                    del self._taker_order_timestamps[order_id]
+                    self.logger().info(f"Timer for taker order {order_id} stopped due to full fill.")
+                
         if market_pair is not None:
             if order_id in self._maker_to_taker_order_ids.keys():
                 limit_order_record = self._sb_order_tracker.get_limit_order(market_pair.maker, order_id)
@@ -844,6 +866,14 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         """
         order_id = order_completed_event.order_id
         market_pair = self._market_pair_tracker.get_market_pair_from_order_id(order_id)
+        if market_pair is not None:
+            if order_id in self._taker_to_maker_order_ids.keys():
+                self.logger().info(f"Taker sell order {order_id} has been fully filled.")
+                
+                # Supprimer l'ordre des timestamps des taker orders
+                if order_id in self._taker_order_timestamps:
+                    del self._taker_order_timestamps[order_id]
+                    self.logger().info(f"Timer for taker order {order_id} stopped due to full fill.")
 
         if market_pair is not None:
             if order_id in self._maker_to_taker_order_ids.keys():
