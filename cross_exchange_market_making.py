@@ -478,11 +478,13 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
     
         # Log des détails de l'ordre initial
         self.logger().info(f"Original taker order {order_id}: is_buy={original_order.is_buy}, quantity={original_order.quantity}")
-        
+    
         # Vérification que les valeurs ne sont pas None
         if original_order.quantity is None:
             self.logger().error(f"Original order quantity is None for order {order_id}. This should not happen.")
             return
+        
+        # Initialisation de filled_quantity à Decimal("0") si elle est None (pour les ordres non exécutés)
         if original_order.filled_quantity is None:
             self.logger().info(f"Order {order_id} has not been filled at all, executing full market order.")
             quantity_filled = Decimal("0")
@@ -538,7 +540,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             self.logger().info(f"Removed replaced taker order {order_id} from _taker_order_timestamps.")
     
         self.logger().info(f"Successfully replaced taker limit order {order_id} with a market order for {quantity_remaining}.")
-    
+        
         # Appeler hedge_tasks_cleanup une fois tout le processus terminé
         self.hedge_tasks_cleanup()  # Appeler après la couverture
 
