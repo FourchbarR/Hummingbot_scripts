@@ -431,7 +431,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         if not self._taker_order_timestamps:
             self.logger().info("No active taker orders to check for expiry.")
             return
-    
+        
         taker_order_timeout = 120  # Time in seconds before converting limit order to market order
         orders_to_cancel = []
     
@@ -439,9 +439,14 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
     
         # Loop through taker orders and check if they have expired
         for order_id, placed_timestamp in list(self._taker_order_timestamps.items()):
+            # Vérifiez si l'ordre a été rempli avant de continuer
+            if order_id not in self._taker_to_maker_order_ids:
+                self.logger().info(f"Taker order {order_id} has already been filled or removed.")
+                continue
+            
             elapsed_time = timestamp - placed_timestamp
             self.logger().info(f"Taker order {order_id} has been open for {elapsed_time} seconds.")
-            
+    
             if elapsed_time > taker_order_timeout:
                 self.logger().info(f"Taker order {order_id} has expired (timeout={taker_order_timeout}s). Marking for cancellation.")
                 orders_to_cancel.append(order_id)
@@ -453,12 +458,17 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             del self._taker_order_timestamps[order_id]  # Remove the order from tracking
             self.logger().info(f"Taker order {order_id} has been replaced with a market order.")
     
-        # Log if there are no remaining taker orders after the check
         if not self._taker_order_timestamps:
             self.logger().info("No more taker orders are pending.")
 
+
     async def replace_taker_limit_with_market_order(self, order_id: str):
         self.logger().info(f"Replacing taker limit order {order_id} with a market order.")
+        
+        # Vérifier si l'ordre est déjà rempli avant de continuer
+        if order_id not in self._taker_to_maker_order_ids:
+            self.logger().info(f"Taker order {order_id} has already been filled or removed.")
+            return
         
         market_pair = self._market_pair_tracker.get_market_pair_from_order_id(order_id)
         
