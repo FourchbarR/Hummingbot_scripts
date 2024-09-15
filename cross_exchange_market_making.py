@@ -472,14 +472,14 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         market_pair = self._market_pair_tracker.get_market_pair_from_order_id(order_id)
         
         if market_pair is None:
-            self.logger().warning(f"Taker limit order {order_id} not found in market pair tracker. Cannot replace it.")
+            self.logger().info(f"Taker limit order {order_id} not found in market pair tracker. Cannot replace it.")
             return
         
         # Récupérer l'ordre original via l'API ou les événements
         original_order = self._sb_order_tracker.get_limit_order(market_pair.taker, order_id)
         
         if original_order is None:
-            self.logger().warning(f"Original taker order {order_id} not found in order tracker.")
+            self.logger().info(f"Original taker order {order_id} not found in order tracker.")
             return
         
         # Nouvelle approche : utiliser les événements pour obtenir la quantité restante
