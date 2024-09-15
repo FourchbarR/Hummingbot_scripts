@@ -472,19 +472,19 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         market_pair = self._market_pair_tracker.get_market_pair_from_order_id(order_id)
         
         if market_pair is None:
-            self.logger().info(f"Taker limit order {order_id} not found in market pair tracker. Cannot replace it.")
+            self.logger().warning(f"Taker limit order {order_id} not found in market pair tracker. Cannot replace it.")
             return
         
-        # Récupérer l'ordre original via l'API ou les événements
-        original_order = self._sb_order_tracker.get_limit_order(market_pair.taker, order_id)
+        # Récupérer l'ordre original via le tracker d'ordres
+        original_order = self._sb_order_tracker.get_order(order_id)
         
         if original_order is None:
-            self.logger().info(f"Original taker order {order_id} not found in order tracker.")
+            self.logger().warning(f"Original taker order {order_id} not found in order tracker.")
             return
         
-        # Nouvelle approche : utiliser les événements pour obtenir la quantité restante
+        # Obtenir la quantité remplie directement depuis l'ordre
         total_quantity = original_order.quantity
-        filled_quantity = self.get_filled_quantity_from_events(order_id)
+        filled_quantity = original_order.filled_quantity
         
         self.logger().info(f"Original order details: total_quantity={total_quantity}, filled_quantity={filled_quantity}")
         
@@ -527,19 +527,6 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 self.logger().warning(f"Ongoing hedging not found for order id {order_id}")
         
         self.logger().info(f"Order mappings and ongoing hedging cleaned up for taker order {order_id}.")
-    
-    def get_filled_quantity_from_events(self, order_id: str) -> Decimal:
-        """
-        Récupère la quantité totale remplie d'un ordre à partir des événements OrderFilled.
-        """
-        filled_quantity = Decimal(0)
-        
-        # Parcourir les événements de remplissage pour l'ordre donné
-        for event in self._sb_order_tracker.get_order_filled_events(order_id):
-            filled_quantity += event.amount_filled
-        
-        return filled_quantity
-
 
     async def main(self, timestamp: float):
         try:
