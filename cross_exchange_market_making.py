@@ -495,7 +495,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         if not self._taker_order_timestamps:
             self.logger().info("No more taker orders are pending.")
 
-      async def replace_taker_limit_with_market_order(self, order_id: str):
+    async def replace_taker_limit_with_market_order(self, order_id: str):
         """
         Remplace l'ordre limit par un ordre market, en tenant compte de la quantité déjà remplie.
         """
