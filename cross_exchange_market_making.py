@@ -426,38 +426,79 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         # Check for expired taker limit orders and replace them with market orders if needed
         safe_ensure_future(self.check_taker_order_expiry(timestamp))
 
+    async def update_filled_quantity(self, order_id: str):
+        """
+        Fonction pour recalculer et mettre à jour filled_quantity avant d'annuler l'ordre.
+        """
+        order = self._sb_order_tracker.get_limit_order(self._market_pair_tracker, order_id)
+        
+        if order is None:
+            self.logger().warning(f"Order {order_id} not found when attempting to update filled quantity.")
+            return None
+    
+        # Recalculer filled_quantity en utilisant les événements de trade
+        total_filled_quantity = Decimal(0)
+    
+        # Récupérer les événements liés à l'ordre depuis le tracker ou l'exchange
+        execution_events = await self.get_order_filled_events(order_id)  # Imaginons que cette fonction récupère les événements
+    
+        for event in execution_events:
+            total_filled_quantity += event.filled_quantity
+            self.logger().info(f"Filled {event.filled_quantity} for order {order_id}. Total filled: {total_filled_quantity}.")
+    
+        if total_filled_quantity.is_nan() or total_filled_quantity == Decimal(0):
+            total_filled_quantity = Decimal(0)
+    
+        # Mettre à jour filled_quantity de l'ordre
+        order.filled_quantity = total_filled_quantity
+    
+        self.logger().info(f"Final filled quantity for order {order_id} updated to {total_filled_quantity}.")
+        return total_filled_quantity
+
     async def check_taker_order_expiry(self, timestamp: float):
-        # Ne pas continuer si le dictionnaire des ordres est vide
+        """
+        Vérifie si les ordres limit sur le taker ont expiré et les annule s'ils ne sont pas remplis.
+        """
         if not self._taker_order_timestamps:
             self.logger().info("No active taker orders to check for expiry.")
             return
     
-        taker_order_timeout = 120  # Time in seconds before converting limit order to market order
+        taker_order_timeout = 120  # Temps en secondes avant de convertir un ordre limit en ordre market
         orders_to_cancel = []
     
         self.logger().info(f"Checking for expired taker orders at timestamp {timestamp}")
     
-        # Loop through taker orders and check if they have expired
         for order_id, placed_timestamp in list(self._taker_order_timestamps.items()):
             elapsed_time = timestamp - placed_timestamp
             self.logger().info(f"Taker order {order_id} has been open for {elapsed_time} seconds.")
             
             if elapsed_time > taker_order_timeout:
                 self.logger().info(f"Taker order {order_id} has expired (timeout={taker_order_timeout}s). Marking for cancellation.")
+                
+                # Mettre à jour filled_quantity avant de procéder à l'annulation
+                total_filled_quantity = await self.update_filled_quantity(order_id)
+                
+                if total_filled_quantity is None:
+                    self.logger().warning(f"Failed to retrieve filled quantity for order {order_id}. Skipping cancellation.")
+                    continue
+    
+                # Ajout à la liste des ordres à annuler
                 orders_to_cancel.append(order_id)
     
-        # Cancel and replace each expired limit order with a market order
+        # Annulation des ordres limit et remplacement par des ordres market
         for order_id in orders_to_cancel:
             self.logger().info(f"Attempting to cancel and replace expired taker order {order_id} with a market order.")
             await self.replace_taker_limit_with_market_order(order_id)
-            del self._taker_order_timestamps[order_id]  # Remove the order from tracking
+            del self._taker_order_timestamps[order_id]  # Retirer l'ordre du suivi
             self.logger().info(f"Taker order {order_id} has been replaced with a market order.")
     
-        # Log if there are no remaining taker orders after the check
         if not self._taker_order_timestamps:
             self.logger().info("No more taker orders are pending.")
 
-    async def replace_taker_limit_with_market_order(self, order_id: str):
+      async def replace_taker_limit_with_market_order(self, order_id: str):
+        """
+        Remplace l'ordre limit par un ordre market, en tenant compte de la quantité déjà remplie.
+        """
         self.logger().info(f"Replacing taker limit order {order_id} with a market order.")
         
         market_pair = self._market_pair_tracker.get_market_pair_from_order_id(order_id)
@@ -466,53 +507,25 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             self.logger().warning(f"Taker limit order {order_id} not found in market pair tracker. Cannot replace it.")
             return
     
-        # Cancel the limit order
+        # Annuler l'ordre limit
         self.logger().info(f"Cancelling taker limit order {order_id} on exchange {market_pair.taker.market.display_name}.")
         self.cancel_order(market_pair.taker, order_id)
-        
-        # Fetch the corresponding amount and direction (buy/sell) from the original order
+    
         original_order = self._sb_order_tracker.get_limit_order(market_pair.taker, order_id)
+    
         if original_order is None:
             self.logger().warning(f"Original taker order {order_id} not found in order tracker.")
             return
     
-        try:
-            # Si original_order.quantity ou original_order.filled_quantity retourne None ou NaN, les traiter comme 0
-            total_quantity = Decimal(original_order.quantity) if original_order.quantity is not None else Decimal(0)
-            
-            # Gestion de NaN pour filled_quantity
-            filled_quantity = Decimal(0)
-            try:
-                filled_quantity = Decimal(original_order.filled_quantity)
-                if filled_quantity.is_nan():
-                    filled_quantity = Decimal(0)
-            except InvalidOperation:
-                self.logger().warning(f"filled_quantity for order {order_id} is NaN. Treating as 0.")
-                filled_quantity = Decimal(0)
-    
-            # Log de la quantité totale et de la quantité remplie
-            self.logger().info(f"Original order quantity: {total_quantity}, filled quantity: {filled_quantity}")
-    
-            # Vérification : total_quantity doit toujours être positif
-            if total_quantity <= Decimal(0):
-                self.logger().warning(f"Total quantity for taker order {order_id} is not positive: {total_quantity}. Aborting market order placement.")
-                return
-    
-            # Calculer la quantité restante à couvrir (quantité totale - quantité remplie)
-            remaining_quantity = total_quantity - filled_quantity
-    
-            # Vérification des valeurs
-            if remaining_quantity <= Decimal(0):
-                self.logger().info(f"Remaining quantity for taker limit order {order_id} is zero. No market order will be placed.")
-                return
-        except InvalidOperation as e:
-            self.logger().error(f"Error calculating remaining quantity for order {order_id}: {e}")
+        # Calculer la quantité restante à exécuter en market
+        remaining_quantity = original_order.quantity - original_order.filled_quantity
+        self.logger().info(f"Original order quantity: {original_order.quantity}, filled quantity: {original_order.filled_quantity}")
+        
+        if remaining_quantity <= Decimal(0):
+            self.logger().info(f"No remaining quantity for order {order_id}. Skipping market order placement.")
             return
     
-        # Log the original order details and remaining quantity
-        self.logger().info(f"Original taker order {order_id}: is_buy={original_order.is_buy}, remaining_quantity={remaining_quantity}")
-        
-        # Place a market order for the remaining quantity
+        # Placer l'ordre market pour la quantité restante
         if original_order.is_buy:
             self.logger().info(f"Placing a market buy order on {market_pair.taker.market.display_name} for remaining quantity {remaining_quantity}.")
             self.buy_with_specific_market(
@@ -530,19 +543,16 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
     
         self.logger().info(f"Successfully replaced taker limit order {order_id} with a market order for remaining quantity {remaining_quantity}.")
         
-        # Clean up mappings and ongoing hedging
+        # Nettoyage des mappages d'ordres et du hedging en cours
         maker_order_id = self._taker_to_maker_order_ids.get(order_id)
         if maker_order_id:
-            # Remove the taker order from _taker_to_maker_order_ids
             del self._taker_to_maker_order_ids[order_id]
             
-            # Remove the maker order ID from _maker_to_taker_order_ids
             if maker_order_id in self._maker_to_taker_order_ids:
                 self._maker_to_taker_order_ids[maker_order_id].remove(order_id)
                 if len(self._maker_to_taker_order_ids[maker_order_id]) == 0:
                     del self._maker_to_taker_order_ids[maker_order_id]
             
-            # Clean up from ongoing hedging
             try:
                 self.del_order_from_ongoing_hedging(order_id)
             except KeyError:
@@ -550,6 +560,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
     
         self.logger().info(f"Order mappings and ongoing hedging cleaned up for taker order {order_id}.")
     
+        
 
     async def main(self, timestamp: float):
         try:
