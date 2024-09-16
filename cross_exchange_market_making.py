@@ -508,6 +508,13 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             self.logger().warning(f"Taker limit order {order_id} not found in market pair tracker. Cannot place market order.")
             return
     
+        # Fetch the original order to get whether it's a buy or sell order
+        original_order = self._sb_order_tracker.get_limit_order(market_pair.taker, order_id)
+        
+        if original_order is None:
+            self.logger().warning(f"Original taker order {order_id} not found in order tracker.")
+            return
+    
         # Place a market order with the remaining quantity
         if remaining_quantity > 0:
             if original_order.is_buy:
@@ -544,6 +551,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 self.logger().warning(f"Ongoing hedging not found for order id {order_id}")
     
         self.logger().info(f"Order mappings and ongoing hedging cleaned up for taker order {order_id}.")
+
 
     async def main(self, timestamp: float):
         try:
