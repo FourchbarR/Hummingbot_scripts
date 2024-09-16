@@ -477,9 +477,18 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             return
     
         try:
-            # Si original_order.quantity ou original_order.filled_quantity retourne None, les traiter comme 0
+            # Si original_order.quantity ou original_order.filled_quantity retourne None ou NaN, les traiter comme 0
             total_quantity = Decimal(original_order.quantity) if original_order.quantity is not None else Decimal(0)
-            filled_quantity = Decimal(original_order.filled_quantity) if original_order.filled_quantity is not None else Decimal(0)
+            
+            # Gestion de NaN pour filled_quantity
+            filled_quantity = Decimal(0)
+            try:
+                filled_quantity = Decimal(original_order.filled_quantity)
+                if filled_quantity.is_nan():
+                    filled_quantity = Decimal(0)
+            except InvalidOperation:
+                self.logger().warning(f"filled_quantity for order {order_id} is NaN. Treating as 0.")
+                filled_quantity = Decimal(0)
     
             # Log de la quantité totale et de la quantité remplie
             self.logger().info(f"Original order quantity: {total_quantity}, filled quantity: {filled_quantity}")
@@ -540,6 +549,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 self.logger().warning(f"Ongoing hedging not found for order id {order_id}")
     
         self.logger().info(f"Order mappings and ongoing hedging cleaned up for taker order {order_id}.")
+    
 
     async def main(self, timestamp: float):
         try:
