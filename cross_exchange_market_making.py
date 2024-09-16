@@ -1,6 +1,6 @@
 import logging
 from collections import defaultdict, deque
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from functools import lru_cache
 from math import ceil, floor
@@ -465,7 +465,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         if market_pair is None:
             self.logger().warning(f"Taker limit order {order_id} not found in market pair tracker. Cannot replace it.")
             return
-
+    
         # Cancel the limit order
         self.logger().info(f"Cancelling taker limit order {order_id} on exchange {market_pair.taker.market.display_name}.")
         self.cancel_order(market_pair.taker, order_id)
@@ -475,13 +475,23 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         if original_order is None:
             self.logger().warning(f"Original taker order {order_id} not found in order tracker.")
             return
-
-        # Calculer la quantité restante à couvrir (quantité totale - quantité remplie)
-        remaining_quantity = original_order.quantity - original_order.filled_quantity
-        if remaining_quantity <= Decimal(0):
-            self.logger().info(f"Remaining quantity for taker limit order {order_id} is zero. No market order will be placed.")
+    
+        try:
+            # Convert the quantities to Decimal, if they are not already
+            total_quantity = Decimal(original_order.quantity)
+            filled_quantity = Decimal(original_order.filled_quantity)
+    
+            # Calculer la quantité restante à couvrir (quantité totale - quantité remplie)
+            remaining_quantity = total_quantity - filled_quantity
+    
+            # Vérification des valeurs
+            if remaining_quantity <= Decimal(0):
+                self.logger().info(f"Remaining quantity for taker limit order {order_id} is zero. No market order will be placed.")
+                return
+        except InvalidOperation as e:
+            self.logger().error(f"Error calculating remaining quantity for order {order_id}: {e}")
             return
-        
+    
         # Log the original order details
         self.logger().info(f"Original taker order {order_id}: is_buy={original_order.is_buy}, remaining_quantity={remaining_quantity}")
         
@@ -500,7 +510,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 remaining_quantity, 
                 order_type=OrderType.MARKET
             )
-
+    
         self.logger().info(f"Successfully replaced taker limit order {order_id} with a market order for remaining quantity {remaining_quantity}.")
         
         # Clean up mappings and ongoing hedging
@@ -520,8 +530,9 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 self.del_order_from_ongoing_hedging(order_id)
             except KeyError:
                 self.logger().warning(f"Ongoing hedging not found for order id {order_id}")
-
+    
         self.logger().info(f"Order mappings and ongoing hedging cleaned up for taker order {order_id}.")
+    
 
     async def main(self, timestamp: float):
         try:
