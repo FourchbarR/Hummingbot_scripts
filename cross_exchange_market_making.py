@@ -477,9 +477,17 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             return
     
         try:
-            # Convert the quantities to Decimal, if they are not already
-            total_quantity = Decimal(original_order.quantity)
-            filled_quantity = Decimal(original_order.filled_quantity)
+            # Si original_order.quantity ou original_order.filled_quantity retourne None, les traiter comme 0
+            total_quantity = Decimal(original_order.quantity) if original_order.quantity is not None else Decimal(0)
+            filled_quantity = Decimal(original_order.filled_quantity) if original_order.filled_quantity is not None else Decimal(0)
+    
+            # Log de la quantité totale et de la quantité remplie
+            self.logger().info(f"Original order quantity: {total_quantity}, filled quantity: {filled_quantity}")
+    
+            # Vérification : total_quantity doit toujours être positif
+            if total_quantity <= Decimal(0):
+                self.logger().warning(f"Total quantity for taker order {order_id} is not positive: {total_quantity}. Aborting market order placement.")
+                return
     
             # Calculer la quantité restante à couvrir (quantité totale - quantité remplie)
             remaining_quantity = total_quantity - filled_quantity
@@ -492,7 +500,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             self.logger().error(f"Error calculating remaining quantity for order {order_id}: {e}")
             return
     
-        # Log the original order details
+        # Log the original order details and remaining quantity
         self.logger().info(f"Original taker order {order_id}: is_buy={original_order.is_buy}, remaining_quantity={remaining_quantity}")
         
         # Place a market order for the remaining quantity
@@ -532,7 +540,6 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 self.logger().warning(f"Ongoing hedging not found for order id {order_id}")
     
         self.logger().info(f"Order mappings and ongoing hedging cleaned up for taker order {order_id}.")
-    
 
     async def main(self, timestamp: float):
         try:
