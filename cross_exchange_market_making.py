@@ -783,7 +783,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             
             # Journaliser la quantité totale remplie jusqu'à présent
             total_filled = self._taker_filled_quantities[maker_order_id]
-            self.logger().info(f"Taker order {maker_order_id} has been partially filled: {total_filled}/{order_filled_event.quantity}.")
+            self.logger().info(f"Taker order {maker_order_id} has been partially filled: {total_filled}/{order_filled_event.amount}.")
         
         # Gestion des ordres maker et taker
         if maker_order_id in self._maker_to_taker_order_ids.keys():
