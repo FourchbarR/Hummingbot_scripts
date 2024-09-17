@@ -469,7 +469,6 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         
         # Vérifier si l'ordre est déjà rempli avant de continuer
         if order_id not in self._taker_to_maker_order_ids:
-            self.logger().info(f"Taker order {order_id} has already been filled or removed.")
             return
         
         market_pair = self._market_pair_tracker.get_market_pair_from_order_id(order_id)
