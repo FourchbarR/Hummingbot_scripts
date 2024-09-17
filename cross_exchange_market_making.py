@@ -477,21 +477,19 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         if market_pair is None:
             self.logger().warning(f"Taker limit order {order_id} not found in market pair tracker. Cannot replace it.")
             return
-
-        # Récupérer l'ordre original et vérifier s'il est déjà rempli à 100%
+        
+        # Récupérer l'ordre original
         original_order = self._sb_order_tracker.get_limit_order(market_pair.taker, order_id)
         if original_order is None:
             self.logger().warning(f"Original taker order {order_id} not found in order tracker.")
             return
-
+    
         # Si l'ordre est déjà rempli à 100%, ne pas le remplacer
         if original_order.filled_quantity == original_order.quantity:
             self.logger().info(f"Taker limit order {order_id} is already fully filled. No need to replace it with a market order.")
-            # Supprimer l'ordre des timestamps
+            # Nettoyage des structures de suivi
             if order_id in self._taker_order_timestamps:
                 del self._taker_order_timestamps[order_id]
-                self.logger().info(f"Timer for taker order {order_id} stopped due to full fill.")
-            # Nettoyer la quantité suivie
             if order_id in self._taker_filled_quantities:
                 del self._taker_filled_quantities[order_id]
             return
@@ -500,7 +498,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         initial_quantity = original_order.quantity
         filled_quantity = self._taker_filled_quantities.get(order_id, Decimal(0))
         
-        # Quantité restante à couvrir
+        # Calcul de la quantité restante à couvrir
         remaining_quantity = initial_quantity - filled_quantity
         if remaining_quantity <= Decimal(0):
             self.logger().info(f"No remaining quantity to cover for taker order {order_id}.")
@@ -527,13 +525,14 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             )
         
         # Nettoyer les structures de suivi
-        del self._taker_order_timestamps[order_id]
-        self.logger().info(f"Taker order {order_id} has been replaced with a market order.")
-        
-        # Nettoyer la quantité suivie
+        if order_id in self._taker_order_timestamps:
+            del self._taker_order_timestamps[order_id]
         if order_id in self._taker_filled_quantities:
             del self._taker_filled_quantities[order_id]
         
+        self.logger().info(f"Taker order {order_id} has been replaced with a market order.")
+        
+        # Nettoyage des autres structures de suivi et couverture
         maker_order_id = self._taker_to_maker_order_ids.get(order_id)
         if maker_order_id:
             del self._taker_to_maker_order_ids[order_id]
@@ -545,8 +544,6 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 self.del_order_from_ongoing_hedging(order_id)
             except KeyError:
                 self.logger().warning(f"Ongoing hedging not found for order id {order_id}")
-        
-        self.logger().info(f"Order mappings and ongoing hedging cleaned up for taker order {order_id}.")
 
 
     async def main(self, timestamp: float):
@@ -777,13 +774,16 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         # Mise à jour de la quantité remplie pour cet ordre limit sur le taker
         if maker_order_id in self._taker_to_maker_order_ids.keys():
             # Taker order filled
-            # Mettre à jour la quantité remplie dans _taker_filled_quantities
+            # Mettre à jour la quantité cumulée remplie dans _taker_filled_quantities
             if maker_order_id not in self._taker_filled_quantities:
                 self._taker_filled_quantities[maker_order_id] = Decimal(0)
+            
+            # Cumul de la quantité remplie
             self._taker_filled_quantities[maker_order_id] += order_filled_event.amount
-
-            self.logger().info(f"Taker order {maker_order_id} has been partially filled: {order_filled_event.amount}. "
-                            f"Total filled so far: {self._taker_filled_quantities[maker_order_id]}")
+            
+            # Journaliser la quantité totale remplie jusqu'à présent
+            total_filled = self._taker_filled_quantities[maker_order_id]
+            self.logger().info(f"Taker order {maker_order_id} has been partially filled: {total_filled}/{order_filled_event.quantity}.")
         
         # Gestion des ordres maker et taker
         if maker_order_id in self._maker_to_taker_order_ids.keys():
@@ -791,13 +791,20 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             # Vérifier si ce remplissage a déjà été traité ou non
             if maker_order_id not in self._maker_to_hedging_trades.keys():
                 self._maker_to_hedging_trades[maker_order_id] = []
+            
+            # Vérifier si l'ID de transaction a déjà été traité
             if exchange_trade_id not in self._maker_to_hedging_trades[maker_order_id]:
                 # Ce remplissage du maker n'a pas encore été traité, soumettre l'ordre de couverture sur le taker
                 self._maker_to_hedging_trades[maker_order_id].append(exchange_trade_id)
+                
+                # Nettoyer les tâches de couverture (hedging) terminées
                 self.hedge_tasks_cleanup()
+                
+                # Ajouter la tâche de couverture
                 self._hedge_maker_order_tasks.append(
                     safe_ensure_future(self.hedge_filled_maker_order(maker_order_id, order_filled_event))
                 )
+
 
     def did_cancel_order(self, order_canceled_event: OrderCancelledEvent):
         if order_canceled_event.order_id in self._taker_to_maker_order_ids.keys():
