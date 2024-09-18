@@ -431,14 +431,10 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
     async def check_taker_order_expiry(self, timestamp: float):
         # Ne pas continuer si le dictionnaire des ordres est vide
         if not self._taker_order_timestamps:
-            self.logger().info("No active taker orders to check for expiry.")
             return
         
-        taker_order_timeout = 120  # Time in seconds before converting limit order to market order
+        taker_order_timeout = 60  # Time in seconds before converting limit order to market order
         orders_to_cancel = []
-    
-        self.logger().info(f"Checking for expired taker orders at timestamp {timestamp}")
-    
         # Loop through taker orders and check if they have expired
         for order_id, placed_timestamp in list(self._taker_order_timestamps.items()):
             # Vérifiez si l'ordre a été rempli avant de continuer
@@ -771,39 +767,37 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
     def did_fill_order(self, order_filled_event: OrderFilledEvent):
         maker_order_id = order_filled_event.order_id
         exchange_trade_id = order_filled_event.exchange_trade_id
-        
+    
         # Mise à jour de la quantité remplie pour cet ordre limit sur le taker
         if maker_order_id in self._taker_to_maker_order_ids.keys():
-            # Taker order filled
-            # Mettre à jour la quantité cumulée remplie dans _taker_filled_quantities
+            # Vérifier si la quantité remplie a déjà été initialisée pour cet ordre
             if maker_order_id not in self._taker_filled_quantities:
                 self._taker_filled_quantities[maker_order_id] = Decimal(0)
-            
-            # Cumul de la quantité remplie
+    
+            # Ajouter la quantité remplie pour cet événement
             self._taker_filled_quantities[maker_order_id] += order_filled_event.amount
-            
+    
             # Journaliser la quantité totale remplie jusqu'à présent
             total_filled = self._taker_filled_quantities[maker_order_id]
             self.logger().info(f"Taker order {maker_order_id} has been partially filled: {total_filled}/{order_filled_event.amount}.")
-        
-        # Gestion des ordres maker et taker
+    
+        # Gestion des ordres maker et taker pour la couverture
         if maker_order_id in self._maker_to_taker_order_ids.keys():
-            # Maker order filled
-            # Vérifier si ce remplissage a déjà été traité ou non
+            # Vérifier si ce remplissage a déjà été traité
             if maker_order_id not in self._maker_to_hedging_trades.keys():
                 self._maker_to_hedging_trades[maker_order_id] = []
-            
-            # Vérifier si l'ID de transaction a déjà été traité
+    
+            # Si cet événement de trade n'a pas encore été traité pour la couverture
             if exchange_trade_id not in self._maker_to_hedging_trades[maker_order_id]:
-                # Ce remplissage du maker n'a pas encore été traité, soumettre l'ordre de couverture sur le taker
+                # Ajouter l'événement à la liste des trades traités
                 self._maker_to_hedging_trades[maker_order_id].append(exchange_trade_id)
-                
-                # Nettoyer les tâches de couverture (hedging) terminées
+    
+                # Nettoyer les tâches de couverture terminées
                 self.hedge_tasks_cleanup()
-                
-                # Ajouter la tâche de couverture
-                self._hedge_maker_order_tasks.append(
-                    safe_ensure_future(self.hedge_filled_maker_order(maker_order_id, order_filled_event))
+    
+                # Lancer la tâche de couverture pour cet ordre
+                self._hedge_maker_order_task = safe_ensure_future(
+                    self.hedge_filled_maker_order(maker_order_id, order_filled_event)
                 )
 
 
