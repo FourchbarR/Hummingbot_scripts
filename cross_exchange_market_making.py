@@ -487,6 +487,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         if original_order.filled_quantity == original_order.quantity:
             self.logger().info(f"Taker limit order {order_id} is already fully filled. No need to replace it with a market order.")
             # Nettoyage des structures de suivi
+            self.cleanup_taker_order_tracking(order_id)  # Assurez-vous d'utiliser une fonction de nettoyage
             if order_id in self._taker_order_timestamps:
                 del self._taker_order_timestamps[order_id]
             if order_id in self._taker_filled_quantities:
@@ -499,10 +500,11 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         
         # Calcul de la quantité restante à couvrir
         remaining_quantity = initial_quantity - filled_quantity
+        self.logger().info(f"Order {order_id} filled quantity: {filled_quantity}/{original_order.quantity}. Remaining: {remaining_quantity}")
         if remaining_quantity <= Decimal(0):
             self.logger().info(f"No remaining quantity to cover for taker order {order_id}.")
             return
-        
+            
         # Annuler l'ordre limit
         self.logger().info(f"Cancelling taker limit order {order_id} on exchange {market_pair.taker.market.display_name}.")
         self.cancel_order(market_pair.taker, order_id)
