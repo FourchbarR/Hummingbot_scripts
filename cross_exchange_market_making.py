@@ -553,6 +553,10 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                     remaining_quantity, 
                     order_type=OrderType.MARKET
                 )
+                # Log supplémentaire pour l'ordre market
+                self.notify_hb_app_with_timestamp(
+                    f"Market BUY order for {remaining_quantity} {market_pair.taker.base_asset} placed on {market_pair.taker.market.display_name}."
+                )
             else:
                 self.logger().info(f"Placing a market sell order on {market_pair.taker.market.display_name} for remaining quantity {remaining_quantity}.")
                 self.sell_with_specific_market(
@@ -560,7 +564,10 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                     remaining_quantity, 
                     order_type=OrderType.MARKET
                 )
-
+                # Log supplémentaire pour l'ordre market
+                self.notify_hb_app_with_timestamp(
+                    f"Market SELL order for {remaining_quantity} {market_pair.taker.base_asset} placed on {market_pair.taker.market.display_name}."
+                )
             self.logger().info(f"Successfully replaced taker limit order {order_id} with a market order for the remaining quantity {remaining_quantity}.")
         
         # Clean up mappings and ongoing hedging
