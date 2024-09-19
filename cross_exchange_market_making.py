@@ -437,8 +437,8 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         for market_pair in self._market_pairs.values():
             taker_market = market_pair.taker.market
             
-            # Utilisez get_limit_orders pour obtenir les ordres limits actifs sur le taker market
-            for order in self._sb_order_tracker.get_limit_orders(taker_market):
+            # Utilisez get_limit_orders pour obtenir les ordres limits actifs
+            for order in self._sb_order_tracker.get_limit_orders():
                 taker_order_id = order.client_order_id
                 
                 # Vérifier si c'est un ordre limit du taker exchange
