@@ -429,13 +429,11 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
     async def check_taker_order_expiry(self, timestamp: float):
         # Ne pas continuer si le dictionnaire des ordres est vide
         if not self._taker_order_timestamps:
-            self.logger().info("No active taker orders to check for expiry.")
             return
         
         taker_order_timeout = 120  # Time in seconds before converting limit order to market order
         orders_to_cancel = []
     
-        self.logger().info(f"Checking for expired taker orders at timestamp {timestamp}")
     
         # Loop through taker orders and check if they have expired
         for order_id, placed_timestamp in list(self._taker_order_timestamps.items()):
