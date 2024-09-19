@@ -437,8 +437,8 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         for market_pair in self._market_pairs.values():
             taker_market = market_pair.taker.market
             
-            # On parcourt les ordres actifs pour voir s'ils ont été partiellement ou totalement remplis
-            for order in self._sb_order_tracker.get_active_orders(taker_market):
+            # Utilisez get_limit_orders pour obtenir les ordres limits actifs sur le taker market
+            for order in self._sb_order_tracker.get_limit_orders(taker_market):
                 taker_order_id = order.client_order_id
                 
                 # Vérifier si c'est un ordre limit du taker exchange
@@ -453,10 +453,11 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                         if filled_quantity > self._taker_filled_quantities[taker_order_id]:
                             newly_filled_quantity = filled_quantity - self._taker_filled_quantities[taker_order_id]
                             self._taker_filled_quantities[taker_order_id] += newly_filled_quantity
-
+    
                             # Logs pour suivre l'évolution des quantités remplies
                             total_filled = self._taker_filled_quantities[taker_order_id]
                             self.logger().info(f"Taker limit order {taker_order_id} filled {newly_filled_quantity} more. Total filled: {total_filled}.")
+
 
     async def check_taker_order_expiry(self, timestamp: float):
         # Ne pas continuer si le dictionnaire des ordres est vide
