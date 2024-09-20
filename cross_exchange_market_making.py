@@ -428,42 +428,32 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         safe_ensure_future(self.check_taker_order_expiry(timestamp))
         
 
-   def did_fill_order(self, order_filled_event: OrderFilledEvent):
+    def observe_taker_filled_orders(self, order_filled_event: OrderFilledEvent):
         """
-        Cette méthode est appelée chaque fois qu'un ordre est rempli, qu'il provienne du maker ou du taker.
-        Pour les ordres du maker, elle gère les tâches de hedging. Pour les ordres du taker, elle met à jour
-        les quantités partiellement remplies.
+        Cette méthode observe les événements d'ordres remplis spécifiquement sur le taker exchange et met à jour
+        _taker_filled_quantities. Elle utilise les événements d'ordres (OrderFilledEvent) capturés dans le Hummingbot framework.
         """
-        maker_order_id = order_filled_event.order_id
-        exchange_trade_id = order_filled_event.exchange_trade_id
+        taker_order_id = order_filled_event.order_id
     
-        # Récupérer le market_pair correspondant à cet ordre
-        market_pair = self._market_pair_tracker.get_market_pair_from_order_id(maker_order_id)
+        # Vérifier si cet ordre est bien un ordre limit du taker exchange
+        if taker_order_id in self._taker_to_maker_order_ids:
+            market_pair = self._market_pair_tracker.get_market_pair_from_order_id(taker_order_id)
     
-        # Vérification pour les ordres du Maker
-        if maker_order_id in self._maker_to_taker_order_ids.keys():
-            # Maker order filled
-            # Vérifier si cet ordre a déjà été traité ou non
-            if maker_order_id not in self._maker_to_hedging_trades.keys():
-                self._maker_to_hedging_trades[maker_order_id] = []
+            # Vérifier que l'ordre appartient au taker exchange et pas au maker exchange
+            if order_filled_event.market == market_pair.taker.market:
+                maker_order_id = self._taker_to_maker_order_ids[taker_order_id]
     
-            if exchange_trade_id not in self._maker_to_hedging_trades[maker_order_id]:
-                # Ce remplissage n'a pas encore été traité, soumettre un ordre de hedging sur le Taker
-                self._maker_to_hedging_trades[maker_order_id] += [exchange_trade_id]
+                # Vérifier si la quantité remplie a déjà été initialisée pour cet ordre
+                if maker_order_id not in self._taker_filled_quantities:
+                    self._taker_filled_quantities[maker_order_id] = Decimal(0)
     
-                # Nettoyage des tâches de hedging
-                self.hedge_tasks_cleanup()
+                # Ajouter la quantité remplie pour cet événement
+                self._taker_filled_quantities[maker_order_id] += order_filled_event.amount
     
-                # Lancer le hedging pour cet ordre du Maker
-                self._hedge_maker_order_task = safe_ensure_future(
-                    self.hedge_filled_maker_order(maker_order_id, order_filled_event)
-                )
-    
-        # Vérification pour les ordres du Taker
-        elif market_pair.taker.trading_pair == order_filled_event.trading_pair:
-            # Appel de observe_taker_filled_orders pour suivre les quantités partiellement remplies sur le Taker
-            self.observe_taker_filled_orders(order_filled_event)
-
+                # Journaliser la quantité totale remplie jusqu'à présent
+                total_filled = self._taker_filled_quantities[maker_order_id]
+                self.logger().info(f"Taker order {taker_order_id} has been partially filled: "
+                                   f"{total_filled}/{order_filled_event.amount}.")
 
     async def check_taker_order_expiry(self, timestamp: float):
         # Ne pas continuer si le dictionnaire des ordres est vide
@@ -816,28 +806,31 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         """
         maker_order_id = order_filled_event.order_id
         exchange_trade_id = order_filled_event.exchange_trade_id
-    
+
+        # Récupérer le market_pair correspondant à cet ordre
+        market_pair = self._market_pair_tracker.get_market_pair_from_order_id(maker_order_id)
+
         # Vérification pour les ordres du Maker
         if maker_order_id in self._maker_to_taker_order_ids.keys():
             # Maker order filled
             # Vérifier si cet ordre a déjà été traité ou non
             if maker_order_id not in self._maker_to_hedging_trades.keys():
                 self._maker_to_hedging_trades[maker_order_id] = []
-    
+
             if exchange_trade_id not in self._maker_to_hedging_trades[maker_order_id]:
                 # Ce remplissage n'a pas encore été traité, soumettre un ordre de hedging sur le Taker
                 self._maker_to_hedging_trades[maker_order_id] += [exchange_trade_id]
-    
+
                 # Nettoyage des tâches de hedging
                 self.hedge_tasks_cleanup()
-    
+
                 # Lancer le hedging pour cet ordre du Maker
                 self._hedge_maker_order_task = safe_ensure_future(
                     self.hedge_filled_maker_order(maker_order_id, order_filled_event)
                 )
-    
+
         # Vérification pour les ordres du Taker
-        elif order_filled_event.market == self._market_pair_tracker.get_market_pair_from_order_id(maker_order_id).taker.market:
+        elif market_pair.taker.trading_pair == order_filled_event.trading_pair:
             # Appel de observe_taker_filled_orders pour suivre les quantités partiellement remplies sur le Taker
             self.observe_taker_filled_orders(order_filled_event)
 
