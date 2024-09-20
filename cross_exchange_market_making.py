@@ -430,37 +430,28 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         # Nouvelle logique pour observer les ordres `limit` remplis sur le taker exchange
         self.observe_taker_filled_orders()
 
-    def observe_taker_filled_orders(self):
+    def observe_taker_filled_orders(self, order_filled_event: OrderFilledEvent):
         """
         Cette méthode observe les événements d'ordres remplis sur le taker exchange et met à jour _taker_filled_quantities.
         Elle utilise les événements d'ordres (OrderFilledEvent) capturés dans le Hummingbot framework.
         """
-        for market_pair in self._market_pairs.values():
-            taker_market = market_pair.taker.market
+        taker_order_id = order_filled_event.order_id
     
-            # Parcourir les ordres limits actifs sur le taker exchange
-            for order in self._sb_order_tracker.get_limit_orders(market_pair.taker):
-                taker_order_id = order.client_order_id
+        # Vérifier si cet ordre appartient au taker et correspond à un ordre en cours
+        if taker_order_id in self._taker_to_maker_order_ids:
+            maker_order_id = self._taker_to_maker_order_ids[taker_order_id]
     
-                # Vérifier si c'est un ordre limit du taker exchange
-                if taker_order_id in self._taker_to_maker_order_ids:
-                    filled_quantity = order.executed_amount_base  # Quantité déjà remplie
+            # Vérifier si la quantité remplie a déjà été initialisée pour cet ordre
+            if maker_order_id not in self._taker_filled_quantities:
+                self._taker_filled_quantities[maker_order_id] = Decimal(0)
     
-                    # Mettre à jour la quantité remplie pour cet ordre limit sur le taker
-                    maker_order_id = self._taker_to_maker_order_ids[taker_order_id]
-                    if maker_order_id not in self._taker_filled_quantities:
-                        self._taker_filled_quantities[maker_order_id] = Decimal(0)
+            # Ajouter la quantité remplie pour cet événement
+            self._taker_filled_quantities[maker_order_id] += order_filled_event.amount
     
-                    newly_filled_quantity = filled_quantity - self._taker_filled_quantities[maker_order_id]
-    
-                    # Incrémenter la quantité remplie seulement si elle a augmenté
-                    if newly_filled_quantity > Decimal(0):
-                        self._taker_filled_quantities[maker_order_id] += newly_filled_quantity
-    
-                        # Journaliser la quantité totale remplie jusqu'à présent
-                        total_filled = self._taker_filled_quantities[maker_order_id]
-                        self.logger().info(f"Taker order {taker_order_id} has been partially filled: "
-                                           f"{total_filled}/{order.quantity}.")
+            # Journaliser la quantité totale remplie jusqu'à présent
+            total_filled = self._taker_filled_quantities[maker_order_id]
+            self.logger().info(f"Taker order {taker_order_id} has been partially filled: "
+                               f"{total_filled}/{order_filled_event.amount}.")
 
 
     async def check_taker_order_expiry(self, timestamp: float):
