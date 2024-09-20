@@ -427,8 +427,6 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         # Check for expired taker limit orders and replace them with market orders if needed
         safe_ensure_future(self.check_taker_order_expiry(timestamp))
         
-        # Nouvelle logique pour observer les ordres `limit` remplis sur le taker exchange
-        self.observe_taker_filled_orders()
 
     def observe_taker_filled_orders(self, order_filled_event: OrderFilledEvent):
         """
