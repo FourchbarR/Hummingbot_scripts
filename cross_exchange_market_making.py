@@ -808,33 +808,44 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         """
         maker_order_id = order_filled_event.order_id
         exchange_trade_id = order_filled_event.exchange_trade_id
-
-        # Récupérer le market_pair correspondant à cet ordre
-        market_pair = self._market_pair_tracker.get_market_pair_from_order_id(maker_order_id)
-
+    
         # Vérification pour les ordres du Maker
         if maker_order_id in self._maker_to_taker_order_ids.keys():
-            # Maker order filled
+            # Récupérer le market_pair correspondant à cet ordre du Maker
+            market_pair = self._market_pair_tracker.get_market_pair_from_order_id(maker_order_id)
+    
+            if market_pair is None:
+                self.logger().error(f"Market pair not found for maker order ID {maker_order_id}. Ignoring this fill event.")
+                return  # Sortir si le market_pair n'a pas pu être trouvé
+    
             # Vérifier si cet ordre a déjà été traité ou non
             if maker_order_id not in self._maker_to_hedging_trades.keys():
                 self._maker_to_hedging_trades[maker_order_id] = []
-
+    
             if exchange_trade_id not in self._maker_to_hedging_trades[maker_order_id]:
                 # Ce remplissage n'a pas encore été traité, soumettre un ordre de hedging sur le Taker
                 self._maker_to_hedging_trades[maker_order_id] += [exchange_trade_id]
-
+    
                 # Nettoyage des tâches de hedging
                 self.hedge_tasks_cleanup()
-
+    
                 # Lancer le hedging pour cet ordre du Maker
                 self._hedge_maker_order_task = safe_ensure_future(
                     self.hedge_filled_maker_order(maker_order_id, order_filled_event)
                 )
-
+    
         # Vérification pour les ordres du Taker
-        elif market_pair.taker.trading_pair == order_filled_event.trading_pair:
+        elif maker_order_id in self._taker_to_maker_order_ids.keys():
+            # Récupérer le market_pair correspondant à cet ordre du Taker
+            market_pair = self._market_pair_tracker.get_market_pair_from_order_id(maker_order_id)
+    
+            if market_pair is None:
+                self.logger().error(f"Market pair not found for taker order ID {maker_order_id}. Ignoring this fill event.")
+                return  # Sortir si le market_pair n'a pas pu être trouvé
+    
             # Appel de observe_taker_filled_orders pour suivre les quantités partiellement remplies sur le Taker
-            self.observe_taker_filled_orders(order_filled_event)
+            if market_pair.taker.trading_pair == order_filled_event.trading_pair:
+                self.observe_taker_filled_orders(order_filled_event)
 
 
     def did_cancel_order(self, order_canceled_event: OrderCancelledEvent):
