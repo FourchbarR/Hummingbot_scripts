@@ -435,12 +435,13 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         """
         taker_order_id = order_filled_event.order_id
     
-        # Vérifier si cet ordre est bien un ordre limit du taker exchange
-        if taker_order_id in self._taker_to_maker_order_ids:
-            market_pair = self._market_pair_tracker.get_market_pair_from_order_id(taker_order_id)
+        # Récupérer le market_pair correspondant à cet ordre
+        market_pair = self._market_pair_tracker.get_market_pair_from_order_id(taker_order_id)
     
-            # Vérifier que l'ordre appartient au taker exchange et pas au maker exchange
-            if order_filled_event.market == market_pair.taker.market:
+        # Vérifier si cet ordre est bien un ordre limit du taker exchange
+        if market_pair and taker_order_id in self._taker_to_maker_order_ids:
+            # Vérifier que l'ordre appartient au taker exchange en comparant les trading_pair
+            if market_pair.taker.trading_pair == order_filled_event.trading_pair:
                 maker_order_id = self._taker_to_maker_order_ids[taker_order_id]
     
                 # Vérifier si la quantité remplie a déjà été initialisée pour cet ordre
@@ -454,6 +455,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 total_filled = self._taker_filled_quantities[maker_order_id]
                 self.logger().info(f"Taker order {taker_order_id} has been partially filled: "
                                    f"{total_filled}/{order_filled_event.amount}.")
+
 
     async def check_taker_order_expiry(self, timestamp: float):
         # Ne pas continuer si le dictionnaire des ordres est vide
