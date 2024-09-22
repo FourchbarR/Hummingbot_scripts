@@ -564,6 +564,8 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 del self._maker_to_taker_order_ids[maker_order_id]
             else:
                 self.logger().warning(f"Certains taker orders sont encore en cours pour le maker order {maker_order_id}. Retrait reporté.")
+
+    
         # Clean up ongoing hedging tasks
         try:
             self.logger().info(f"Cleaning up ongoing hedging for taker order {order_id}.")
