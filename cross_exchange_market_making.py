@@ -550,12 +550,38 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         del self._taker_to_maker_order_ids[order_id]
     
         if maker_order_id in self._maker_to_taker_order_ids:
-            self.logger().info(f"Removing taker order {order_id} from _maker_to_taker_order_ids[{maker_order_id}].")
-            self._maker_to_taker_order_ids[maker_order_id].remove(order_id)
+            # Récupérer la liste des taker orders associés à ce maker order
+            taker_order_ids = self._maker_to_taker_order_ids[maker_order_id]
             
-            if len(self._maker_to_taker_order_ids[maker_order_id]) == 0:
-                self.logger().info(f"All taker orders for maker order {maker_order_id} have been processed. Removing maker order {maker_order_id} from _maker_to_taker_order_ids.")
+            # Vérifier si tous les taker orders ont été traités
+            all_taker_orders_processed = all(
+                taker_order_id not in self._taker_to_maker_order_ids for taker_order_id in taker_order_ids
+            )
+            
+            if all_taker_orders_processed:
+                self.logger().info(f"Tous les taker orders liés à {maker_order_id} ont été traités.")
+                self.logger().info(f"Removing maker order {maker_order_id} from _maker_to_taker_order_ids.")
                 del self._maker_to_taker_order_ids[maker_order_id]
+            else:
+                self.logger().warning(f"Certains taker orders sont encore en cours pour le maker order {maker_order_id}. Retrait reporté.")
+
+
+        if maker_order_id in self._maker_to_taker_order_ids:
+    # Récupérer la liste des taker orders associés à ce maker order
+    taker_order_ids = self._maker_to_taker_order_ids[maker_order_id]
+    
+    # Vérifier si tous les taker orders ont été traités
+    all_taker_orders_processed = all(
+        taker_order_id not in self._taker_to_maker_order_ids for taker_order_id in taker_order_ids
+    )
+    
+    if all_taker_orders_processed:
+        self.logger().info(f"Tous les taker orders liés à {maker_order_id} ont été traités.")
+        self.logger().info(f"Removing maker order {maker_order_id} from _maker_to_taker_order_ids.")
+        del self._maker_to_taker_order_ids[maker_order_id]
+    else:
+        self.logger().warning(f"Certains taker orders sont encore en cours pour le maker order {maker_order_id}. Retrait reporté.")
+
     
         # Clean up ongoing hedging tasks
         try:
