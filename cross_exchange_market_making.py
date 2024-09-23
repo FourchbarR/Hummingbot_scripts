@@ -863,8 +863,17 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             self.handle_unfilled_taker_order(order_canceled_event)
 
     def did_fail_order(self, order_failed_event: MarketOrderFailureEvent):
+        """
+        Cette méthode est appelée chaque fois qu'un ordre échoue, et traite le nettoyage associé.
+        """
         if order_failed_event.order_id in self._taker_to_maker_order_ids.keys():
+            # Traiter l'ordre échoué
             self.handle_unfilled_taker_order(order_failed_event)
+            
+            # Nettoyage du timestamp de l'ordre échoué
+            if order_failed_event.order_id in self._taker_order_timestamps:
+                del self._taker_order_timestamps[order_failed_event.order_id]
+                self.logger().info(f"Timer for taker order {order_failed_event.order_id} stopped due to failure.")
 
     def did_expire_order(self, order_expired_event: OrderExpiredEvent):
         if order_expired_event.order_id in self._taker_to_maker_order_ids.keys():
