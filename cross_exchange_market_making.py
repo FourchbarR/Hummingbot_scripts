@@ -66,7 +66,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
 
     ORDER_ADJUST_SAMPLE_INTERVAL = 5
     ORDER_ADJUST_SAMPLE_WINDOW = 12
-
+    DEBUG_LOG_INTERVAL = 300  # Intervalle de 5 minutes en secondes
     SHADOW_MAKER_ORDER_KEEP_ALIVE_DURATION = 60.0 * 15
     CANCEL_EXPIRY_DURATION = 60.0
 
@@ -139,6 +139,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         self.add_markets(all_markets)
         self._taker_order_timestamps = {}
         self._taker_filled_quantities = {} #Ajout chatgpt pour suivis des quantitées filled avant 2 minutes
+        self._last_debug_log_timestamp = 0  # Horodatage du dernier log de débogage
 
     @property
     def order_amount(self):
@@ -379,7 +380,11 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         should_report_warnings = ((current_tick > last_tick) and
                                   (LogOption.STATUS_REPORT in self.logging_options)
                                   )
-
+        # Appel de la fonction de log de débogage toutes les 5 minutes
+        if (timestamp - self._last_debug_log_timestamp) >= self.DEBUG_LOG_INTERVAL:
+            self.debug_status_log()
+            self._last_debug_log_timestamp = timestamp
+            
         # Perform clock tick with the market pair tracker.
         self._market_pair_tracker.tick(timestamp)
 
@@ -427,6 +432,22 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         # Check for expired taker limit orders and replace them with market orders if needed
         safe_ensure_future(self.check_taker_order_expiry(timestamp))
         
+    def debug_status_log(self):
+        """
+        Log l'état interne des structures importantes toutes les 5 minutes.
+        """
+        self.logger().debug("===== Debug Status Log =====")
+        self.logger().debug(f"_taker_order_timestamps: {self._taker_order_timestamps}")
+        self.logger().debug(f"_taker_filled_quantities: {self._taker_filled_quantities}")
+        self.logger().debug(f"_taker_to_maker_order_ids: {self._taker_to_maker_order_ids}")
+        self.logger().debug(f"_maker_to_taker_order_ids: {self._maker_to_taker_order_ids}")
+        self.logger().debug(f"_ongoing_hedging: {self._ongoing_hedging}")
+        self.logger().debug(f"ready_for_new_trades(): {self.ready_for_new_trades()}")
+        self.logger().debug(f"Hedging tasks (number of active tasks): {len(self._hedge_maker_order_tasks)}")
+        for idx, task in enumerate(self._hedge_maker_order_tasks):
+            self.logger().debug(f"Task {idx} - Done: {task.done()}, Cancelled: {task.cancelled()}")
+        self.logger().debug("===== End Debug Status Log =====")
+  
 
     def observe_taker_filled_orders(self, order_filled_event: OrderFilledEvent):
         """
