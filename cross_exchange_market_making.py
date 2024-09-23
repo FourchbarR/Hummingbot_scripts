@@ -511,7 +511,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             return
     
         maker_order_id = self._taker_to_maker_order_ids.get(order_id)
-        
+    
         # Retrieve filled quantities and remaining quantity to fill
         filled_quantity = self._taker_filled_quantities.get(maker_order_id, {}).get(order_id, Decimal(0))
         original_order = self._sb_order_tracker.get_limit_order(market_pair.taker, order_id)
@@ -544,7 +544,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 self.notify_hb_app_with_timestamp(
                     f"Taker MARKET SELL order ({remaining_quantity} {market_pair.taker.base_asset}) has been placed to cover unfilled quantity."
                 )
-        
+    
         # Clean up mappings
         self.logger().info(f"Removing taker order {order_id} from _taker_to_maker_order_ids.")
         del self._taker_to_maker_order_ids[order_id]
@@ -552,19 +552,30 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         if maker_order_id in self._maker_to_taker_order_ids:
             # Récupérer la liste des taker orders associés à ce maker order
             taker_order_ids = self._maker_to_taker_order_ids[maker_order_id]
-            
+    
             # Vérifier si tous les taker orders ont été traités
             all_taker_orders_processed = all(
                 taker_order_id not in self._taker_to_maker_order_ids for taker_order_id in taker_order_ids
             )
-            
+    
             if all_taker_orders_processed:
                 self.logger().info(f"Tous les taker orders liés à {maker_order_id} ont été traités.")
                 self.logger().info(f"Removing maker order {maker_order_id} from _maker_to_taker_order_ids.")
                 del self._maker_to_taker_order_ids[maker_order_id]
-            else:
-                self.logger().warning(f"Certains taker orders sont encore en cours pour le maker order {maker_order_id}. Retrait reporté.")
-
+                
+                # Nettoyage des ordres de hedging sur le maker
+                if maker_order_id in self._maker_to_hedging_trades:
+                    self.logger().info(f"Maker order {maker_order_id} has been completely hedged. Removing from _maker_to_hedging_trades.")
+                    del self._maker_to_hedging_trades[maker_order_id]
+    
+        # Nettoyer les quantités partiellement remplies si nécessaire
+        if maker_order_id in self._taker_filled_quantities:
+            if order_id in self._taker_filled_quantities[maker_order_id]:
+                del self._taker_filled_quantities[maker_order_id][order_id]
+            
+            # Supprimer les entrées si tous les ordres ont été traités
+            if not self._taker_filled_quantities[maker_order_id]:
+                del self._taker_filled_quantities[maker_order_id]
     
         # Clean up ongoing hedging tasks
         try:
@@ -573,8 +584,10 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         except KeyError:
             self.logger().warning(f"Ongoing hedging not found for order id {order_id}. Skipping hedging cleanup.")
     
+        # Nettoyage des timestamps des ordres sur le taker
         del self._taker_order_timestamps[order_id]
         self.logger().info(f"Order mappings and ongoing hedging cleaned up for taker order {order_id}. Process complete.")
+
 
     async def main(self, timestamp: float):
         try:
