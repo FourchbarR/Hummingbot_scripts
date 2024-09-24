@@ -475,9 +475,10 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         for order_id in orders_to_cancel:
             self.logger().info(f"Attempting to cancel and replace expired taker order {order_id} with a market order.")
             await self.replace_taker_limit_with_market_order(order_id)
-            del self._taker_order_timestamps[order_id]  # Remove the order from tracking
+            if len(self._taker_order_timestamps[order_id]) > 0:  # Remove the order from tracking
+                del self._taker_order_timestamps[order_id]  # Remove the order from tracking
             self.logger().info(f"Taker order {order_id} has been replaced with a market order.")
-    
+            
         if not self._taker_order_timestamps:
             self.logger().info("No more taker orders are pending.")
   
