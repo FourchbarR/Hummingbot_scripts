@@ -448,39 +448,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             self.logger().debug(f"Task {idx} - Done: {task.done()}, Cancelled: {task.cancelled()}")
         self.logger().debug("===== End Debug Status Log =====")
 
-    async def check_taker_order_expiry(self, timestamp: float):
-        # Ne pas continuer si le dictionnaire des ordres est vide
-        if not self._taker_order_timestamps:
-            return
-        
-        taker_order_timeout = 120  # Time in seconds before converting limit order to market order
-        orders_to_cancel = []
     
-    
-        # Loop through taker orders and check if they have expired
-        for order_id, placed_timestamp in list(self._taker_order_timestamps.items()):
-            # Vérifiez si l'ordre a été rempli avant de continuer
-            if order_id not in self._taker_to_maker_order_ids:
-                self.logger().info(f"Taker order {order_id} has already been filled or removed.")
-                continue
-            
-            elapsed_time = timestamp - placed_timestamp
-            self.logger().info(f"Taker order {order_id} has been open for {elapsed_time} seconds.")
-    
-            if elapsed_time > taker_order_timeout:
-                self.logger().info(f"Taker order {order_id} has expired (timeout={taker_order_timeout}s). Marking for cancellation.")
-                orders_to_cancel.append(order_id)
-    
-        # Cancel and replace each expired limit order with a market order
-        for order_id in orders_to_cancel:
-            self.logger().info(f"Attempting to cancel and replace expired taker order {order_id} with a market order.")
-            await self.replace_taker_limit_with_market_order(order_id)
-            if len(self._taker_order_timestamps[order_id]) > 0:  # Remove the order from tracking
-                del self._taker_order_timestamps[order_id]  # Remove the order from tracking
-            self.logger().info(f"Taker order {order_id} has been replaced with a market order.")
-            
-        if not self._taker_order_timestamps:
-            self.logger().info("No more taker orders are pending.")
   
 
     def observe_taker_filled_orders(self, order_filled_event: OrderFilledEvent):
@@ -516,6 +484,40 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 # Journaliser la quantité totale remplie jusqu'à présent
                 self.logger().info(f"Taker order {taker_order_id} has been partially filled: "
                                    f"{total_filled_for_maker_order}/{order_filled_event.amount}.")
+                
+    async def check_taker_order_expiry(self, timestamp: float):
+        # Ne pas continuer si le dictionnaire des ordres est vide
+        if not self._taker_order_timestamps:
+            return
+        
+        taker_order_timeout = 120  # Time in seconds before converting limit order to market order
+        orders_to_cancel = []
+    
+    
+        # Loop through taker orders and check if they have expired
+        for order_id, placed_timestamp in list(self._taker_order_timestamps.items()):
+            # Vérifiez si l'ordre a été rempli avant de continuer
+            if order_id not in self._taker_to_maker_order_ids:
+                self.logger().info(f"Taker order {order_id} has already been filled or removed.")
+                continue
+            
+            elapsed_time = timestamp - placed_timestamp
+            self.logger().info(f"Taker order {order_id} has been open for {elapsed_time} seconds.")
+    
+            if elapsed_time > taker_order_timeout:
+                self.logger().info(f"Taker order {order_id} has expired (timeout={taker_order_timeout}s). Marking for cancellation.")
+                orders_to_cancel.append(order_id)
+    
+        # Cancel and replace each expired limit order with a market order
+        for order_id in orders_to_cancel:
+            self.logger().info(f"Attempting to cancel and replace expired taker order {order_id} with a market order.")
+            await self.replace_taker_limit_with_market_order(order_id)
+            if len(self._taker_order_timestamps[order_id]) > 0:  # Remove the order from tracking
+                del self._taker_order_timestamps[order_id]  # Remove the order from tracking
+            self.logger().info(f"Taker order {order_id} has been replaced with a market order.")
+            
+        if not self._taker_order_timestamps:
+            self.logger().info("No more taker orders are pending.")
 
     async def replace_taker_limit_with_market_order(self, order_id: str):
         self.logger().info(f"Starting the process to replace taker limit order {order_id} with a market order.")
@@ -566,6 +568,9 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 )
     
             # --- Ajout de la portion hedgée via un ordre market ---
+            # Ajout d'un TradeFee par défaut (ou calculé en fonction du taker market)
+            trade_fee = AddedToCostTradeFee(flat_fees=[TokenAmount(market_pair.taker.quote_asset, Decimal("0"))])
+            
             fill_event = OrderFilledEvent(
                 timestamp=self.current_timestamp,
                 order_id=order_id,
@@ -573,8 +578,9 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 trade_type=TradeType.BUY if original_order.is_buy else TradeType.SELL,
                 order_type=OrderType.MARKET,
                 amount=remaining_quantity,
-                price=original_order.price,
-                exchange_trade_id=order_id  # Assuming the same order_id for tracking the filled market order
+                price=original_order.price,  # Assuming the last price
+                trade_fee=trade_fee,  # Ajout du trade_fee ici
+                exchange_trade_id=order_id,  # Assuming the same order_id for tracking the filled market order
             )
             self.set_ongoing_hedging([fill_event], order_id)
             # ---------------------------------------
@@ -621,7 +627,8 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         # Nettoyage des timestamps des ordres sur le taker
         del self._taker_order_timestamps[order_id]
         self.logger().info(f"Order mappings and ongoing hedging cleaned up for taker order {order_id}. Process complete.")
-    
+
+        
 
     async def main(self, timestamp: float):
         try:
