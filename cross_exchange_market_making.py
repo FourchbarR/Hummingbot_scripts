@@ -552,48 +552,22 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             if original_order.is_buy:
                 self.logger().info(f"Placing a market buy order on {market_pair.taker.market.display_name} for remaining quantity {remaining_quantity}.")
                 self.buy_with_specific_market(market_pair.taker, remaining_quantity, order_type=OrderType.MARKET)
-                
-                # Notify the user that the market buy order was placed
-                self.notify_hb_app_with_timestamp(
-                    f"Taker MARKET BUY order ({remaining_quantity} {market_pair.taker.base_asset}) has been placed to cover unfilled quantity."
-                )
             else:
                 self.logger().info(f"Placing a market sell order on {market_pair.taker.market.display_name} for remaining quantity {remaining_quantity}.")
                 self.sell_with_specific_market(market_pair.taker, remaining_quantity, order_type=OrderType.MARKET)
-                
-                # Notify the user that the market sell order was placed
-                self.notify_hb_app_with_timestamp(
-                    f"Taker MARKET SELL order ({remaining_quantity} {market_pair.taker.base_asset}) has been placed to cover unfilled quantity."
-                )
+    
+            # Marquer cette quantité comme hedgée
+            self._hedged_quantities[maker_order_id] = self._hedged_quantities.get(maker_order_id, Decimal(0)) + remaining_quantity
     
         # Clean up mappings
         self.logger().info(f"Removing taker order {order_id} from _taker_to_maker_order_ids.")
         del self._taker_to_maker_order_ids[order_id]
     
-        if maker_order_id in self._maker_to_taker_order_ids:
-            # Récupérer la liste des taker orders associés à ce maker order
-            taker_order_ids = self._maker_to_taker_order_ids[maker_order_id]
-    
-            # Vérifier si tous les taker orders ont été traités
-            all_taker_orders_processed = all(
-                taker_order_id not in self._taker_to_maker_order_ids for taker_order_id in taker_order_ids
-            )
-    
-            if all_taker_orders_processed:
-                self.logger().info(f"Tous les taker orders liés à {maker_order_id} ont été traités.")
-                self.logger().info(f"Removing maker order {maker_order_id} from _maker_to_taker_order_ids.")
-                del self._maker_to_taker_order_ids[maker_order_id]
-                
-                # Nettoyage des ordres de hedging sur le maker
-                if maker_order_id in self._maker_to_hedging_trades:
-                    self.logger().info(f"Maker order {maker_order_id} has been completely hedged. Removing from _maker_to_hedging_trades.")
-                    del self._maker_to_hedging_trades[maker_order_id]
-    
         # Nettoyer les quantités partiellement remplies si nécessaire
         if maker_order_id in self._taker_filled_quantities:
             if order_id in self._taker_filled_quantities[maker_order_id]:
                 del self._taker_filled_quantities[maker_order_id][order_id]
-            
+    
             # Supprimer les entrées si tous les ordres ont été traités
             if not self._taker_filled_quantities[maker_order_id]:
                 del self._taker_filled_quantities[maker_order_id]
@@ -1085,45 +1059,56 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
 
         return True
 
-    async def check_and_hedge_orders(self,
-                                     maker_order_id: str,
-                                     market_pair: MakerTakerMarketPair):
+    async def check_and_hedge_orders(self, maker_order_id: str, market_pair: MakerTakerMarketPair):
         """
         Look into the stored and un-hedged limit order fill events, and emit orders to hedge them, depending on
         availability of funds on the taker market.
-
+    
         :param market_pair: cross exchange market pair
         """
-
+    
+        # Obtenir les enregistrements de remplissage des ordres buy et sell
         buy_fill_records = self.get_unhedged_buy_records(market_pair)
         sell_fill_records = self.get_unhedged_sell_records(market_pair)
-
+    
+        # Calculer la quantité totale remplie pour les ordres buy
         buy_fill_quantity = sum([fill_event.amount for _, fill_event in buy_fill_records])
+        # Ajuster en soustrayant les quantités déjà hedgées
+        if maker_order_id in self._hedged_quantities:
+            buy_fill_quantity -= self._hedged_quantities[maker_order_id]
+            self.logger().info(f"After adjusting for hedged quantities: buy_fill_quantity={buy_fill_quantity}, "
+                               f"hedged_quantities={self._hedged_quantities.get(maker_order_id, Decimal(0))}")
+    
+        # Calculer la quantité totale remplie pour les ordres sell
         sell_fill_quantity = sum([fill_event.amount for _, fill_event in sell_fill_records])
-
+        # Ajuster en soustrayant les quantités déjà hedgées
+        if maker_order_id in self._hedged_quantities:
+            sell_fill_quantity -= self._hedged_quantities[maker_order_id]
+            self.logger().info(f"After adjusting for hedged quantities: sell_fill_quantity={sell_fill_quantity}, "
+                               f"hedged_quantities={self._hedged_quantities.get(maker_order_id, Decimal(0))}")
+    
         global s_decimal_zero
-
+    
         taker_trading_pair = market_pair.taker.trading_pair
         taker_market = market_pair.taker.market
-
-        # Convert maker order size (in maker base asset) to taker order size (in taker base asset)
+    
+        # Convertir la taille de l'ordre du maker (en actif de base du maker) en taille d'ordre pour le taker
         _, _, quote_rate, _, _, base_rate, _, _, _ = self.get_conversion_rates(market_pair)
-
+    
         if buy_fill_quantity > 0:
-            # Maker buy
-            # Taker sell
+            # Maker buy -> Taker sell
             taker_slippage_adjustment_factor = Decimal("1") - self.slippage_buffer
-
+    
             hedged_order_quantity = min(
                 buy_fill_quantity / base_rate,
                 taker_market.get_available_balance(market_pair.taker.base_asset) *
                 self.order_size_taker_balance_factor
             )
             quantized_hedge_amount = taker_market.quantize_order_amount(taker_trading_pair, Decimal(hedged_order_quantity))
-
+    
             avg_fill_price = (sum([r.price * r.amount for _, r in buy_fill_records]) /
                               sum([r.amount for _, r in buy_fill_records]))
-
+    
             self.check_multiple_buy_orders(buy_fill_records)
             if self.is_gateway_market(market_pair.taker):
                 order_price = await market_pair.taker.market.get_order_price(
@@ -1139,23 +1124,23 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 order_price = taker_market.get_price_for_volume(
                     taker_trading_pair, False, quantized_hedge_amount
                 ).result_price
-
+    
             self.log_with_clock(logging.INFO, f"Calculated by HB order_price: {order_price}")
             order_price *= taker_slippage_adjustment_factor
             order_price = taker_market.quantize_order_price(taker_trading_pair, order_price)
             self.log_with_clock(logging.INFO, f"Slippage buffer adjusted order_price: {order_price}")
-
+    
             if quantized_hedge_amount > s_decimal_zero:
                 self.place_order(
                     market_pair,
-                    False,
-                    False,
+                    False,  # Is buy (False because it's a sell on taker)
+                    False,  # Is market (False because it's a limit order)
                     quantized_hedge_amount,
                     order_price,
                     maker_order_id,
                     buy_fill_records
                 )
-
+    
                 if LogOption.MAKER_ORDER_HEDGED in self.logging_options:
                     self.log_with_clock(
                         logging.INFO,
@@ -1170,12 +1155,11 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                     f"{buy_fill_quantity} {market_pair.maker.base_asset} is less than the minimum order amount "
                     f"allowed on the taker market. No hedging possible yet."
                 )
-
+    
         if sell_fill_quantity > 0:
-            # Maker sell
-            # Taker buy
+            # Maker sell -> Taker buy
             taker_slippage_adjustment_factor = Decimal("1") + self.slippage_buffer
-
+    
             if self.is_gateway_market(market_pair.taker):
                 taker_price = await market_pair.taker.market.get_order_price(
                     taker_trading_pair,
@@ -1191,7 +1175,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                     True,
                     sell_fill_quantity / base_rate
                 ).result_price
-
+    
             hedged_order_quantity = min(
                 sell_fill_quantity / base_rate,
                 taker_market.get_available_balance(market_pair.taker.quote_asset) /
@@ -1201,10 +1185,10 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 taker_trading_pair,
                 Decimal(hedged_order_quantity)
             )
-
+    
             avg_fill_price = (sum([r.price * r.amount for _, r in sell_fill_records]) /
                               sum([r.amount for _, r in sell_fill_records]))
-
+    
             self.check_multiple_sell_orders(sell_fill_records)
             if self.is_gateway_market(market_pair.taker):
                 order_price = await market_pair.taker.market.get_order_price(
@@ -1220,23 +1204,23 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 order_price = taker_market.get_price_for_volume(
                     taker_trading_pair, True, quantized_hedge_amount
                 ).result_price
-
+    
             self.log_with_clock(logging.INFO, f"Calculated by HB order_price: {order_price}")
             order_price *= taker_slippage_adjustment_factor
             order_price = taker_market.quantize_order_price(taker_trading_pair, order_price)
             self.log_with_clock(logging.INFO, f"Slippage buffer adjusted order_price: {order_price}")
-
+    
             if quantized_hedge_amount > s_decimal_zero:
                 self.place_order(
                     market_pair,
-                    True,
-                    False,
+                    True,  # Is buy
+                    False,  # Is market (False because it's a limit order)
                     quantized_hedge_amount,
                     order_price,
                     maker_order_id,
                     sell_fill_records,
                 )
-
+    
                 if LogOption.MAKER_ORDER_HEDGED in self.logging_options:
                     self.log_with_clock(
                         logging.INFO,
@@ -1251,6 +1235,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                     f"{sell_fill_quantity} {market_pair.maker.base_asset} is less than the minimum order amount "
                     f"allowed on the taker market. No hedging possible yet."
                 )
+    
 
     def get_adjusted_limit_order_size(self, market_pair: MakerTakerMarketPair) -> Tuple[Decimal, Decimal]:
         """
