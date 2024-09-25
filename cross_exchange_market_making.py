@@ -489,36 +489,53 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         # Ne pas continuer si le dictionnaire des ordres est vide
         if not self._taker_order_timestamps:
             return
-        
-        taker_order_timeout = 120  # Time in seconds before converting limit order to market order
+
+        taker_order_timeout = 60  # Time in seconds before converting limit order to market order
         orders_to_cancel = []
-    
-    
+
         # Loop through taker orders and check if they have expired
         for order_id, placed_timestamp in list(self._taker_order_timestamps.items()):
             # Vérifiez si l'ordre a été rempli avant de continuer
             if order_id not in self._taker_to_maker_order_ids:
-                self.logger().info(f"Taker order {order_id} has already been filled or removed.")
-                continue
-            
+                self.logger().info(f"Taker order {order_id} id yet to be filled or removed.")
+
             elapsed_time = timestamp - placed_timestamp
             self.logger().info(f"Taker order {order_id} has been open for {elapsed_time} seconds.")
-    
+
             if elapsed_time > taker_order_timeout:
                 self.logger().info(f"Taker order {order_id} has expired (timeout={taker_order_timeout}s). Marking for cancellation.")
                 orders_to_cancel.append(order_id)
-    
+
         # Cancel and replace each expired limit order with a market order
         for order_id in orders_to_cancel:
             self.logger().info(f"Attempting to cancel and replace expired taker order {order_id} with a market order.")
             await self.replace_taker_limit_with_market_order(order_id)
-            if len(self._taker_order_timestamps[order_id]) > 0:  # Remove the order from tracking
+            if len(self._taker_order_timestamps) > 0:  # Remove the order from tracking
                 del self._taker_order_timestamps[order_id]  # Remove the order from tracking
             self.logger().info(f"Taker order {order_id} has been replaced with a market order.")
-            
-        if not self._taker_order_timestamps:
-            self.logger().info("No more taker orders are pending.")
 
+        if len(self._taker_order_timestamps) == 0:
+            self.logger().info("No more taker orders are pending.")
+            market_pair = self._market_pair_tracker.get_market_pair_from_order_id(order_id)
+            # Calculate a mapping from market pair to list of active limit orders on the market.
+            market_pair_to_active_orders = defaultdict(list)
+
+            for maker_market, limit_order, order_id in self.active_maker_limit_orders:
+                market_pair = self._market_pairs.get((maker_market, limit_order.trading_pair))
+                if market_pair is None:
+                    self.log_with_clock(logging.WARNING,
+                                        f"The in-flight maker order in for the trading pair '{limit_order.trading_pair}' "
+                                        f"does not correspond to any whitelisted trading pairs. Skipping.")
+                    continue
+
+                if not self._sb_order_tracker.has_in_flight_cancel(limit_order.client_order_id) and \
+                        limit_order.client_order_id in self._maker_to_taker_order_ids.keys():
+                    market_pair_to_active_orders[market_pair].append(limit_order)
+
+            # Process each market pair independently.
+            for market_pair in self._market_pairs.values():
+                await self.process_market_pair(timestamp, market_pair, market_pair_to_active_orders[market_pair])
+                
     async def replace_taker_limit_with_market_order(self, order_id: str):
         self.logger().info(f"Starting the process to replace taker limit order {order_id} with a market order.")
     
