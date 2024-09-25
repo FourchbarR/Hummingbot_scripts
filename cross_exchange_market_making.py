@@ -66,7 +66,6 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
 
     ORDER_ADJUST_SAMPLE_INTERVAL = 5
     ORDER_ADJUST_SAMPLE_WINDOW = 12
-    DEBUG_LOG_INTERVAL = 10  # Intervalle de 5 minutes en secondes
     SHADOW_MAKER_ORDER_KEEP_ALIVE_DURATION = 60.0 * 15
     CANCEL_EXPIRY_DURATION = 60.0
 
@@ -380,10 +379,6 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         should_report_warnings = ((current_tick > last_tick) and
                                   (LogOption.STATUS_REPORT in self.logging_options)
                                   )
-        # Appel de la fonction de log de débogage toutes les 5 minutes
-        if (timestamp - self._last_debug_log_timestamp) >= self.DEBUG_LOG_INTERVAL:
-            self.debug_status_log()
-            self._last_debug_log_timestamp = timestamp
             
         # Perform clock tick with the market pair tracker.
         self._market_pair_tracker.tick(timestamp)
@@ -432,25 +427,6 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         # Check for expired taker limit orders and replace them with market orders if needed
         safe_ensure_future(self.check_taker_order_expiry(timestamp))
         
-    def debug_status_log(self):
-        """
-        Log l'état interne des structures importantes toutes les 5 minutes.
-        """
-        self.logger().debug("===== Debug Status Log =====")
-        self.logger().debug(f"_taker_order_timestamps: {self._taker_order_timestamps}")
-        self.logger().debug(f"_taker_filled_quantities: {self._taker_filled_quantities}")
-        self.logger().debug(f"_taker_to_maker_order_ids: {self._taker_to_maker_order_ids}")
-        self.logger().debug(f"_maker_to_taker_order_ids: {self._maker_to_taker_order_ids}")
-        self.logger().debug(f"_ongoing_hedging: {self._ongoing_hedging}")
-        self.logger().debug(f"ready_for_new_trades(): {self.ready_for_new_trades()}")
-        self.logger().debug(f"Hedging tasks (number of active tasks): {len(self._hedge_maker_order_tasks)}")
-        for idx, task in enumerate(self._hedge_maker_order_tasks):
-            self.logger().debug(f"Task {idx} - Done: {task.done()}, Cancelled: {task.cancelled()}")
-        self.logger().debug("===== End Debug Status Log =====")
-
-    
-  
-
     def observe_taker_filled_orders(self, order_filled_event: OrderFilledEvent):
         """
         Observe les événements d'ordres remplis spécifiquement sur le taker exchange et met à jour
@@ -489,52 +465,64 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         # Ne pas continuer si le dictionnaire des ordres est vide
         if not self._taker_order_timestamps:
             return
-
+    
         taker_order_timeout = 60  # Time in seconds before converting limit order to market order
         orders_to_cancel = []
-
+    
         # Loop through taker orders and check if they have expired
         for order_id, placed_timestamp in list(self._taker_order_timestamps.items()):
             # Vérifiez si l'ordre a été rempli avant de continuer
             if order_id not in self._taker_to_maker_order_ids:
-                self.logger().info(f"Taker order {order_id} id yet to be filled or removed.")
-
+                self.logger().info(f"Taker order {order_id} is not in _taker_to_maker_order_ids, might already be filled or removed.")
+    
             elapsed_time = timestamp - placed_timestamp
             self.logger().info(f"Taker order {order_id} has been open for {elapsed_time} seconds.")
-
+    
             if elapsed_time > taker_order_timeout:
                 self.logger().info(f"Taker order {order_id} has expired (timeout={taker_order_timeout}s). Marking for cancellation.")
                 orders_to_cancel.append(order_id)
-
+    
         # Cancel and replace each expired limit order with a market order
         for order_id in orders_to_cancel:
             self.logger().info(f"Attempting to cancel and replace expired taker order {order_id} with a market order.")
             await self.replace_taker_limit_with_market_order(order_id)
             if len(self._taker_order_timestamps) > 0:  # Remove the order from tracking
-                del self._taker_order_timestamps[order_id]  # Remove the order from tracking
-            self.logger().info(f"Taker order {order_id} has been replaced with a market order.")
-
+                del self._taker_order_timestamps[order_id]
+                self.logger().info(f"Taker order {order_id} has been replaced with a market order and removed from tracking.")
+    
+        # Afficher les valeurs présentes dans les dictionnaires après traitement
+        self.logger().info(f"After check_taker_order_expiry:")
+        self.logger().info(f"_taker_to_maker_order_ids: {self._taker_to_maker_order_ids}")
+        self.logger().info(f"_maker_to_taker_order_ids: {self._maker_to_taker_order_ids}")
+        self.logger().info(f"_taker_order_timestamps: {self._taker_order_timestamps}")
+        self.logger().info(f"_taker_filled_quantities: {self._taker_filled_quantities}")
+        self.logger().info(f"_ongoing_hedging: {self._ongoing_hedging}")
+        self.logger().info(f"_maker_to_hedging_trades: {self._maker_to_hedging_trades}")
+        
         if len(self._taker_order_timestamps) == 0:
             self.logger().info("No more taker orders are pending.")
+            # Optionnel : vous pouvez également afficher d'autres informations pertinentes ici
+    
             market_pair = self._market_pair_tracker.get_market_pair_from_order_id(order_id)
             # Calculate a mapping from market pair to list of active limit orders on the market.
             market_pair_to_active_orders = defaultdict(list)
-
+    
             for maker_market, limit_order, order_id in self.active_maker_limit_orders:
                 market_pair = self._market_pairs.get((maker_market, limit_order.trading_pair))
                 if market_pair is None:
                     self.log_with_clock(logging.WARNING,
-                                        f"The in-flight maker order in for the trading pair '{limit_order.trading_pair}' "
+                                        f"The in-flight maker order for the trading pair '{limit_order.trading_pair}' "
                                         f"does not correspond to any whitelisted trading pairs. Skipping.")
                     continue
-
+    
                 if not self._sb_order_tracker.has_in_flight_cancel(limit_order.client_order_id) and \
                         limit_order.client_order_id in self._maker_to_taker_order_ids.keys():
                     market_pair_to_active_orders[market_pair].append(limit_order)
-
+    
             # Process each market pair independently.
             for market_pair in self._market_pairs.values():
                 await self.process_market_pair(timestamp, market_pair, market_pair_to_active_orders[market_pair])
+
                 
                 
     async def replace_taker_limit_with_market_order(self, order_id: str):
