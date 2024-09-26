@@ -502,7 +502,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         if not self._taker_order_timestamps:
             return
 
-        taker_order_timeout = 120  # Time in seconds before converting limit order to market order
+        taker_order_timeout = 60  # Time in seconds before converting limit order to market order
         orders_to_cancel = []
 
         # Loop through taker orders and check if they have expired
@@ -522,6 +522,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         # Cancel and replace each expired limit order with a market order
         for order_id in orders_to_cancel:
             self.logger().info(f"Attempting to cancel and replace expired taker order {order_id} with a market order.")
+            self.replace_taker_limit_with_market_order(order_id)
             if len(self._taker_order_timestamps[order_id]) > 0:  # Remove the order from tracking
                 del self._taker_order_timestamps[order_id]  # Remove the order from tracking
             self.logger().info(f"Taker order {order_id} has been replaced with a market order.")
