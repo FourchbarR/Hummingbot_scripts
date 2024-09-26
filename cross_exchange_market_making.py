@@ -486,17 +486,17 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         for order_id in orders_to_cancel:
             self.logger().info(f"Attempting to cancel and replace expired taker order {order_id} with a market order.")
             await self.replace_taker_limit_with_market_order(order_id)
+            # Afficher les valeurs présentes dans les dictionnaires après traitement
+            self.logger().info(f"After check_taker_order_expiry:")
+            self.logger().info(f"_taker_to_maker_order_ids: {self._taker_to_maker_order_ids}")
+            self.logger().info(f"_maker_to_taker_order_ids: {self._maker_to_taker_order_ids}")
+            self.logger().info(f"_taker_order_timestamps: {self._taker_order_timestamps}")
+            self.logger().info(f"_taker_filled_quantities: {self._taker_filled_quantities}")
+            self.logger().info(f"_ongoing_hedging: {self._ongoing_hedging}")
+            self.logger().info(f"_maker_to_hedging_trades: {self._maker_to_hedging_trades}")
+            
             if len(self._taker_order_timestamps) > 0:  # Remove the order from tracking
                 del self._taker_order_timestamps[order_id]
-                self.logger().info(f"Taker order {order_id} has been replaced with a market order and removed from tracking.")
-                # Afficher les valeurs présentes dans les dictionnaires après traitement
-                self.logger().info(f"After check_taker_order_expiry:")
-                self.logger().info(f"_taker_to_maker_order_ids: {self._taker_to_maker_order_ids}")
-                self.logger().info(f"_maker_to_taker_order_ids: {self._maker_to_taker_order_ids}")
-                self.logger().info(f"_taker_order_timestamps: {self._taker_order_timestamps}")
-                self.logger().info(f"_taker_filled_quantities: {self._taker_filled_quantities}")
-                self.logger().info(f"_ongoing_hedging: {self._ongoing_hedging}")
-                self.logger().info(f"_maker_to_hedging_trades: {self._maker_to_hedging_trades}")
         
         if len(self._taker_order_timestamps) == 0:
             self.logger().info("No more taker orders are pending.")
