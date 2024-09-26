@@ -578,6 +578,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             self.logger().info(f"Market order placed successfully for {remaining_quantity} {market_pair.taker.base_asset}.")
     
             # Ajout d'un TradeFee par défaut (ou calculé en fonction du taker market)
+            """
             trade_fee = AddedToCostTradeFee(flat_fees=[TokenAmount(market_pair.taker.quote_asset, Decimal("0"))])
             
             fill_event = OrderFilledEvent(
@@ -594,7 +595,8 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             
             self.logger().info(f"Setting ongoing hedging for order {order_id}. Fill event: {fill_event}")
             self.set_ongoing_hedging([fill_event], order_id)  # Ajout d'un log ici pour vérifier le remplissage
-    
+            """
+            
         # Nettoyage de l'ongoing hedging avant de modifier _taker_to_maker_order_ids
         try:
             self.logger().info(f"Cleaning up ongoing hedging for taker order {order_id}.")
