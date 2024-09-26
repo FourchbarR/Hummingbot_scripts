@@ -1000,6 +1000,14 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 if len(self._order_fill_sell_events[market_pair]) == 0:
                     del self._order_fill_sell_events[market_pair]
 
+                self.logger().info(f"After check_taker_order_expiry:")
+                self.logger().info(f"_taker_to_maker_order_ids: {self._taker_to_maker_order_ids}")
+                self.logger().info(f"_maker_to_taker_order_ids: {self._maker_to_taker_order_ids}")
+                self.logger().info(f"_taker_order_timestamps: {self._taker_order_timestamps}")
+                self.logger().info(f"_taker_filled_quantities: {self._taker_filled_quantities}")
+                self.logger().info(f"_ongoing_hedging: {self._ongoing_hedging}")
+                self.logger().info(f"_maker_to_hedging_trades: {self._maker_to_hedging_trades}")
+
     def did_complete_sell_order(self, order_completed_event: SellOrderCompletedEvent):
         """
         Output log message when a ask order (on maker side or taker side) is completely taken.
@@ -1074,6 +1082,14 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 # Cleanup maker fill events - no longer needed to create taker orders if all fills were hedged
                 if len(self._order_fill_buy_events[market_pair]) == 0:
                     del self._order_fill_buy_events[market_pair]
+
+                self.logger().info(f"After check_taker_order_expiry:")
+                self.logger().info(f"_taker_to_maker_order_ids: {self._taker_to_maker_order_ids}")
+                self.logger().info(f"_maker_to_taker_order_ids: {self._maker_to_taker_order_ids}")
+                self.logger().info(f"_taker_order_timestamps: {self._taker_order_timestamps}")
+                self.logger().info(f"_taker_filled_quantities: {self._taker_filled_quantities}")
+                self.logger().info(f"_ongoing_hedging: {self._ongoing_hedging}")
+                self.logger().info(f"_maker_to_hedging_trades: {self._maker_to_hedging_trades}")
 
     async def check_if_price_has_drifted(self, market_pair: MakerTakerMarketPair, active_order: LimitOrder):
         """
