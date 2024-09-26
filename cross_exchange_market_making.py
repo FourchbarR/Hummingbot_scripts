@@ -562,9 +562,18 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             if original_order.is_buy:
                 self.logger().info(f"Placing a market buy order on {market_pair.taker.market.display_name} for remaining quantity {remaining_quantity}.")
                 self.buy_with_specific_market(market_pair.taker, remaining_quantity, order_type=OrderType.MARKET)
+
+                # Notify the user that the market buy order was placed
+                self.notify_hb_app_with_timestamp(
+                    f"Taker MARKET BUY order ({remaining_quantity} {market_pair.taker.base_asset}) has been placed to cover unfilled quantity."
+                )
             else:
                 self.logger().info(f"Placing a market sell order on {market_pair.taker.market.display_name} for remaining quantity {remaining_quantity}.")
                 self.sell_with_specific_market(market_pair.taker, remaining_quantity, order_type=OrderType.MARKET)
+                # Notify the user that the market sell order was placed
+                self.notify_hb_app_with_timestamp(
+                    f"Taker MARKET SELL order ({remaining_quantity} {market_pair.taker.base_asset}) has been placed to cover unfilled quantity."
+                )
     
             self.logger().info(f"Market order placed successfully for {remaining_quantity} {market_pair.taker.base_asset}.")
     
