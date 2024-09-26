@@ -586,17 +586,25 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             self.logger().info(f"Setting ongoing hedging for order {order_id}. Fill event: {fill_event}")
             self.set_ongoing_hedging([fill_event], order_id)  # Ajout d'un log ici pour vérifier le remplissage
     
-        # Clean up mappings
+        # Nettoyage de l'ongoing hedging avant de modifier _taker_to_maker_order_ids
+        try:
+            self.logger().info(f"Cleaning up ongoing hedging for taker order {order_id}.")
+            self.del_order_from_ongoing_hedging(order_id)
+            self.logger().info(f"Hedging for order {order_id} removed successfully.")
+        except KeyError:
+            self.logger().warning(f"Ongoing hedging not found for order id {order_id}. Skipping hedging cleanup.")
+        
+        # Clean up mappings après la suppression de l'ongoing hedging
         self.logger().info(f"Removing taker order {order_id} from _taker_to_maker_order_ids.")
         del self._taker_to_maker_order_ids[order_id]
-    
+        
         if maker_order_id in self._maker_to_taker_order_ids:
             taker_order_ids = self._maker_to_taker_order_ids[maker_order_id]
-    
+        
             all_taker_orders_processed = all(
                 taker_order_id not in self._taker_to_maker_order_ids for taker_order_id in taker_order_ids
             )
-    
+        
             if all_taker_orders_processed:
                 self.logger().info(f"Tous les taker orders liés à {maker_order_id} ont été traités.")
                 self.logger().info(f"Removing maker order {maker_order_id} from _maker_to_taker_order_ids.")
@@ -605,21 +613,14 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 if maker_order_id in self._maker_to_hedging_trades:
                     self.logger().info(f"Maker order {maker_order_id} has been completely hedged. Removing from _maker_to_hedging_trades.")
                     del self._maker_to_hedging_trades[maker_order_id]
-    
+        
         if maker_order_id in self._taker_filled_quantities:
             if order_id in self._taker_filled_quantities[maker_order_id]:
                 del self._taker_filled_quantities[maker_order_id][order_id]
             
             if not self._taker_filled_quantities[maker_order_id]:
                 del self._taker_filled_quantities[maker_order_id]
-    
-        try:
-            self.logger().info(f"Cleaning up ongoing hedging for taker order {order_id}.")
-            self.del_order_from_ongoing_hedging(order_id)
-            self.logger().info(f"Hedging for order {order_id} removed successfully.")
-        except KeyError:
-            self.logger().warning(f"Ongoing hedging not found for order id {order_id}. Skipping hedging cleanup.")
-    
+        
         # Nettoyage des timestamps des ordres sur le taker
         del self._taker_order_timestamps[order_id]
         self.logger().info(f"Order mappings and ongoing hedging cleaned up for taker order {order_id}. Process complete.")
