@@ -631,6 +631,9 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             
             if not self._taker_filled_quantities[maker_order_id]:
                 del self._taker_filled_quantities[maker_order_id]
+
+        # Appeler hedge_tasks_cleanup une fois tout le processus terminé
+        self.hedge_tasks_cleanup()  # Appeler après la couverture
         
         # Nettoyage des timestamps des ordres sur le taker
         del self._taker_order_timestamps[order_id]
