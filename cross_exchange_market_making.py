@@ -494,36 +494,8 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             self.logger().info(f"_taker_filled_quantities: {self._taker_filled_quantities}")
             self.logger().info(f"_ongoing_hedging: {self._ongoing_hedging}")
             self.logger().info(f"_maker_to_hedging_trades: {self._maker_to_hedging_trades}")
-            
-            if len(self._taker_order_timestamps) > 0:  # Remove the order from tracking
-                del self._taker_order_timestamps[order_id]
-        
-        if len(self._taker_order_timestamps) == 0:
-            self.logger().info("No more taker orders are pending.")
-            # Optionnel : vous pouvez également afficher d'autres informations pertinentes ici
-    
-            market_pair = self._market_pair_tracker.get_market_pair_from_order_id(order_id)
-            # Calculate a mapping from market pair to list of active limit orders on the market.
-            market_pair_to_active_orders = defaultdict(list)
-    
-            for maker_market, limit_order, order_id in self.active_maker_limit_orders:
-                market_pair = self._market_pairs.get((maker_market, limit_order.trading_pair))
-                if market_pair is None:
-                    self.log_with_clock(logging.WARNING,
-                                        f"The in-flight maker order for the trading pair '{limit_order.trading_pair}' "
-                                        f"does not correspond to any whitelisted trading pairs. Skipping.")
-                    continue
-    
-                if not self._sb_order_tracker.has_in_flight_cancel(limit_order.client_order_id) and \
-                        limit_order.client_order_id in self._maker_to_taker_order_ids.keys():
-                    market_pair_to_active_orders[market_pair].append(limit_order)
-    
-            # Process each market pair independently.
-            for market_pair in self._market_pairs.values():
-                await self.process_market_pair(timestamp, market_pair, market_pair_to_active_orders[market_pair])
-
-                
-                
+                            
+               
     async def replace_taker_limit_with_market_order(self, order_id: str):
         self.logger().info(f"Starting the process to replace taker limit order {order_id} with a market order.")
     
@@ -576,68 +548,36 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 )
     
             self.logger().info(f"Market order placed successfully for {remaining_quantity} {market_pair.taker.base_asset}.")
-    
-            # Ajout d'un TradeFee par défaut (ou calculé en fonction du taker market)
-            """
-            trade_fee = AddedToCostTradeFee(flat_fees=[TokenAmount(market_pair.taker.quote_asset, Decimal("0"))])
             
-            fill_event = OrderFilledEvent(
-                timestamp=self.current_timestamp,
-                order_id=order_id,
-                trading_pair=market_pair.taker.trading_pair,
-                trade_type=TradeType.BUY if original_order.is_buy else TradeType.SELL,
-                order_type=OrderType.MARKET,
-                amount=remaining_quantity,
-                price=original_order.price,
-                trade_fee=trade_fee,
-                exchange_trade_id=order_id,
-            )
-            
-            self.logger().info(f"Setting ongoing hedging for order {order_id}. Fill event: {fill_event}")
-            self.set_ongoing_hedging([fill_event], order_id)  # Ajout d'un log ici pour vérifier le remplissage
-            """
-            
-        # Nettoyage de l'ongoing hedging avant de modifier _taker_to_maker_order_ids
-        try:
-            self.logger().info(f"Cleaning up ongoing hedging for taker order {order_id}.")
-            self.del_order_from_ongoing_hedging(order_id)
-            self.logger().info(f"Hedging for order {order_id} removed successfully.")
-        except KeyError:
-            self.logger().warning(f"Ongoing hedging not found for order id {order_id}. Skipping hedging cleanup.")
-        
-        # Clean up mappings après la suppression de l'ongoing hedging
-        self.logger().info(f"Removing taker order {order_id} from _taker_to_maker_order_ids.")
+        maker_order_id = self._taker_to_maker_order_ids[order_id]
+        # Remove the completed taker order
         del self._taker_to_maker_order_ids[order_id]
-        
-        if maker_order_id in self._maker_to_taker_order_ids:
-            taker_order_ids = self._maker_to_taker_order_ids[maker_order_id]
-        
-            all_taker_orders_processed = all(
-                taker_order_id not in self._taker_to_maker_order_ids for taker_order_id in taker_order_ids
-            )
-        
-            if all_taker_orders_processed:
-                self.logger().info(f"Tous les taker orders liés à {maker_order_id} ont été traités.")
-                self.logger().info(f"Removing maker order {maker_order_id} from _maker_to_taker_order_ids.")
+        # Get all active taker order ids for the maker order id
+        active_taker_ids = set(self._taker_to_maker_order_ids.keys()).intersection(set(
+            self._maker_to_taker_order_ids[maker_order_id]))
+        if len(active_taker_ids) == 0:
+            # Was maker order fully filled?
+            maker_order_ids = list(order_id for market, limit_order, order_id in self.active_maker_limit_orders)
+            if maker_order_id not in maker_order_ids:
+                # Remove the completed fully hedged maker order
                 del self._maker_to_taker_order_ids[maker_order_id]
-                
-                if maker_order_id in self._maker_to_hedging_trades:
-                    self.logger().info(f"Maker order {maker_order_id} has been completely hedged. Removing from _maker_to_hedging_trades.")
-                    del self._maker_to_hedging_trades[maker_order_id]
-        
-        if maker_order_id in self._taker_filled_quantities:
-            if order_id in self._taker_filled_quantities[maker_order_id]:
-                del self._taker_filled_quantities[maker_order_id][order_id]
-            
-            if not self._taker_filled_quantities[maker_order_id]:
-                del self._taker_filled_quantities[maker_order_id]
+                del self._maker_to_hedging_trades[maker_order_id]
 
-        # Appeler hedge_tasks_cleanup une fois tout le processus terminé
-        self.hedge_tasks_cleanup()  # Appeler après la couverture
-        
-        # Nettoyage des timestamps des ordres sur le taker
-        del self._taker_order_timestamps[order_id]
-        self.logger().info(f"Order mappings and ongoing hedging cleaned up for taker order {order_id}. Process complete.")
+        try:
+            self.del_order_from_ongoing_hedging(order_id)
+        except KeyError:
+            self.logger().warning(f"Ongoing hedging not found for order id {order_id}")
+
+        # Delete hedged maker fill event
+        fill_events = []
+        for fill_event in self._order_fill_sell_events[market_pair]:
+            if self.is_fill_event_in_ongoing_hedging(fill_event):
+                fill_events += [fill_event]
+        self._order_fill_sell_events[market_pair] = fill_events
+
+        # Cleanup maker fill events - no longer needed to create taker orders if all fills were hedged
+        if len(self._order_fill_sell_events[market_pair]) == 0:
+            del self._order_fill_sell_events[market_pair]
 
     async def main(self, timestamp: float):
         try:
