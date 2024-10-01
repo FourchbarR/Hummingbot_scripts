@@ -545,19 +545,27 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 )
     
             self.logger().info(f"Market order placed successfully for {remaining_quantity} {market_pair.taker.base_asset}.")
-    
-        # Nettoyer les structures de suivi après le placement de l'ordre de marché
-        del self._taker_to_maker_order_ids[order_id]
-        if maker_order_id in self._taker_filled_quantities and order_id in self._taker_filled_quantities[maker_order_id]:
-            del self._taker_filled_quantities[maker_order_id][order_id]
-    
-        if maker_order_id in self._taker_filled_quantities and not self._taker_filled_quantities[maker_order_id]:
+
+        # Nettoyer les structures de suivi des ordres taker/maker
+        if taker_order_id in self._taker_to_maker_order_ids:
+            del self._taker_to_maker_order_ids[taker_order_id]
+        if maker_order_id in self._maker_to_taker_order_ids:
+            del self._maker_to_taker_order_ids[maker_order_id]
+        
+        # Supprimer les quantités remplies associées à cet ordre
+        if maker_order_id in self._taker_filled_quantities:
             del self._taker_filled_quantities[maker_order_id]
-    
+        
+        # Supprimer l'horodatage de l'ordre taker
+        if taker_order_id in self._taker_order_timestamps:
+            del self._taker_order_timestamps[taker_order_id]
+        
+        # Si le hedging est terminé, retirer l'entrée du hedging en cours
         if maker_order_id in self._ongoing_hedging:
             del self._ongoing_hedging[maker_order_id]
-    
-        del self._taker_order_timestamps[order_id]
+        
+        # Nettoyer les tâches de hedging terminées
+        self._hedge_maker_order_tasks = [task for task in self._hedge_maker_order_tasks if not task.done()]
 
     async def main(self, timestamp: float):
         try:
