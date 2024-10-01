@@ -428,39 +428,63 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         safe_ensure_future(self.check_taker_order_expiry(timestamp))
         
     def observe_taker_filled_orders(self, order_filled_event: OrderFilledEvent):
-        """
-        Observe les événements d'ordres remplis spécifiquement sur le taker exchange et met à jour
-        _taker_filled_quantities.
-        """
-        taker_order_id = order_filled_event.order_id
-    
-        # Récupérer le market_pair correspondant à cet ordre
-        market_pair = self._market_pair_tracker.get_market_pair_from_order_id(taker_order_id)
-    
-        # Vérifier si cet ordre est bien un ordre limit du taker exchange
-        if market_pair and taker_order_id in self._taker_to_maker_order_ids:
-            # Vérifier que l'ordre appartient au taker exchange en comparant les trading_pair
-            if market_pair.taker.trading_pair == order_filled_event.trading_pair:
-                maker_order_id = self._taker_to_maker_order_ids[taker_order_id]
-    
-                # Initialiser la structure imbriquée si nécessaire
-                if maker_order_id not in self._taker_filled_quantities:
-                    self._taker_filled_quantities[maker_order_id] = {}
-    
-                # Vérifier si la quantité remplie a déjà été initialisée pour cet ordre taker
-                if taker_order_id not in self._taker_filled_quantities[maker_order_id]:
-                    self._taker_filled_quantities[maker_order_id][taker_order_id] = Decimal(0)
-    
-                # Ajouter la quantité remplie pour cet événement pour cet ordre taker spécifique
-                self._taker_filled_quantities[maker_order_id][taker_order_id] += order_filled_event.amount
-    
-                # Calculer la quantité totale remplie pour tous les ordres taker liés à cet ordre maker
-                total_filled_for_maker_order = sum(self._taker_filled_quantities[maker_order_id].values())
-    
-                # Journaliser la quantité totale remplie jusqu'à présent
-                self.logger().info(f"Taker order {taker_order_id} has been partially filled: "
-                                   f"{total_filled_for_maker_order}/{order_filled_event.amount}.")
+    """
+    Observe les événements d'ordres remplis spécifiquement sur le taker exchange et met à jour
+    _taker_filled_quantities.
+    """
+    taker_order_id = order_filled_event.order_id
+
+    # Récupérer le market_pair correspondant à cet ordre
+    market_pair = self._market_pair_tracker.get_market_pair_from_order_id(taker_order_id)
+
+    # Vérifier si cet ordre est bien un ordre limit du taker exchange
+    if market_pair and taker_order_id in self._taker_to_maker_order_ids:
+        # Vérifier que l'ordre appartient au taker exchange en comparant les trading_pair
+        if market_pair.taker.trading_pair == order_filled_event.trading_pair:
+            maker_order_id = self._taker_to_maker_order_ids[taker_order_id]
+
+            # Initialiser la structure imbriquée si nécessaire
+            if maker_order_id not in self._taker_filled_quantities:
+                self._taker_filled_quantities[maker_order_id] = {}
+
+            # Vérifier si la quantité remplie a déjà été initialisée pour cet ordre taker
+            if taker_order_id not in self._taker_filled_quantities[maker_order_id]:
+                self._taker_filled_quantities[maker_order_id][taker_order_id] = Decimal(0)
+
+            # Ajouter la quantité remplie pour cet événement pour cet ordre taker spécifique
+            self._taker_filled_quantities[maker_order_id][taker_order_id] += order_filled_event.amount
+
+            # Calculer la quantité totale remplie pour tous les ordres taker liés à cet ordre maker
+            total_filled_for_maker_order = sum(self._taker_filled_quantities[maker_order_id].values())
+
+            # Journaliser la quantité totale remplie jusqu'à présent
+            self.logger().info(f"Taker order {taker_order_id} has been partially filled: "
+                               f"{total_filled_for_maker_order}/{order_filled_event.amount}.")
+
+            # Vérifier si l'ordre est totalement rempli
+            original_order = self._sb_order_tracker.get_limit_order(market_pair.taker, taker_order_id)
+            if total_filled_for_maker_order >= original_order.quantity:
+                # L'ordre est entièrement rempli, retirer des structures de suivi
+                self.logger().info(f"Taker order {taker_order_id} has been fully filled. Removing from tracking.")
                 
+                # Supprimer les entrées associées à cet ordre taker
+                del self._taker_filled_quantities[maker_order_id][taker_order_id]
+                del self._taker_to_maker_order_ids[taker_order_id]
+                
+                # Vérifiez s'il n'y a plus d'ordres pour cet ordre maker
+                if not self._taker_filled_quantities[maker_order_id]:
+                    del self._taker_filled_quantities[maker_order_id]
+
+                self.notify_hb_app_with_timestamp(
+                    f"Taker order {taker_order_id} has been fully filled for maker order {maker_order_id}."
+                )
+
+                # Supprimer également l'ordre maker si tous les ordres taker liés sont terminés
+                if maker_order_id not in self._maker_to_taker_order_ids:
+                    self.logger().info(f"Maker order {maker_order_id} has been fully covered. Removing from tracking.")
+                    del self._ongoing_hedging[maker_order_id]
+                    del self._maker_to_taker_order_ids[maker_order_id]
+
     async def check_taker_order_expiry(self, timestamp: float):
         # Ne pas continuer si le dictionnaire des ordres est vide
         if not self._taker_order_timestamps:
@@ -474,6 +498,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             # Vérifiez si l'ordre a été rempli avant de continuer
             if order_id not in self._taker_to_maker_order_ids:
                 self.logger().info(f"Taker order {order_id} is not in _taker_to_maker_order_ids, might already be filled or removed.")
+                continue
     
             elapsed_time = timestamp - placed_timestamp
             self.logger().info(f"Taker order {order_id} has been open for {elapsed_time} seconds.")
@@ -486,7 +511,13 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         for order_id in orders_to_cancel:
             self.logger().info(f"Attempting to cancel and replace expired taker order {order_id} with a market order.")
             await self.replace_taker_limit_with_market_order(order_id)
-            # Afficher les valeurs présentes dans les dictionnaires après traitement
+    
+            # Supprimer l'ordre expiré des structures de suivi
+            del self._taker_to_maker_order_ids[order_id]
+            del self._taker_order_timestamps[order_id]
+            maker_order_id = self._taker_to_maker_order_ids.get(order_id, None)
+            if maker_order_id and order_id in self._taker_filled_quantities.get(maker_order_id, {}):
+                del self._taker_filled_quantities[maker_order_id][order_id]
             self.logger().info(f"After check_taker_order_expiry:")
             self.logger().info(f"_taker_to_maker_order_ids: {self._taker_to_maker_order_ids}")
             self.logger().info(f"_maker_to_taker_order_ids: {self._maker_to_taker_order_ids}")
@@ -494,8 +525,10 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             self.logger().info(f"_taker_filled_quantities: {self._taker_filled_quantities}")
             self.logger().info(f"_ongoing_hedging: {self._ongoing_hedging}")
             self.logger().info(f"_maker_to_hedging_trades: {self._maker_to_hedging_trades}")
-                            
-               
+            
+        if len(self._taker_order_timestamps) == 0:
+            self.logger().info("No more taker orders are pending.")
+
     async def replace_taker_limit_with_market_order(self, order_id: str):
         self.logger().info(f"Starting the process to replace taker limit order {order_id} with a market order.")
     
@@ -534,7 +567,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             if original_order.is_buy:
                 self.logger().info(f"Placing a market buy order on {market_pair.taker.market.display_name} for remaining quantity {remaining_quantity}.")
                 self.buy_with_specific_market(market_pair.taker, remaining_quantity, order_type=OrderType.MARKET)
-
+    
                 # Notify the user that the market buy order was placed
                 self.notify_hb_app_with_timestamp(
                     f"Taker MARKET BUY order ({remaining_quantity} {market_pair.taker.base_asset}) has been placed to cover unfilled quantity."
@@ -542,42 +575,19 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             else:
                 self.logger().info(f"Placing a market sell order on {market_pair.taker.market.display_name} for remaining quantity {remaining_quantity}.")
                 self.sell_with_specific_market(market_pair.taker, remaining_quantity, order_type=OrderType.MARKET)
+    
                 # Notify the user that the market sell order was placed
                 self.notify_hb_app_with_timestamp(
                     f"Taker MARKET SELL order ({remaining_quantity} {market_pair.taker.base_asset}) has been placed to cover unfilled quantity."
                 )
     
             self.logger().info(f"Market order placed successfully for {remaining_quantity} {market_pair.taker.base_asset}.")
-            
-        maker_order_id = self._taker_to_maker_order_ids[order_id]
-        # Remove the completed taker order
+    
+        # Nettoyer les structures de suivi après le remplacement de l'ordre limite
         del self._taker_to_maker_order_ids[order_id]
-        # Get all active taker order ids for the maker order id
-        active_taker_ids = set(self._taker_to_maker_order_ids.keys()).intersection(set(
-            self._maker_to_taker_order_ids[maker_order_id]))
-        if len(active_taker_ids) == 0:
-            # Was maker order fully filled?
-            maker_order_ids = list(order_id for market, limit_order, order_id in self.active_maker_limit_orders)
-            if maker_order_id not in maker_order_ids:
-                # Remove the completed fully hedged maker order
-                del self._maker_to_taker_order_ids[maker_order_id]
-                del self._maker_to_hedging_trades[maker_order_id]
-
-        try:
-            self.del_order_from_ongoing_hedging(order_id)
-        except KeyError:
-            self.logger().warning(f"Ongoing hedging not found for order id {order_id}")
-
-        # Delete hedged maker fill event
-        fill_events = []
-        for fill_event in self._order_fill_sell_events[market_pair]:
-            if self.is_fill_event_in_ongoing_hedging(fill_event):
-                fill_events += [fill_event]
-        self._order_fill_sell_events[market_pair] = fill_events
-
-        # Cleanup maker fill events - no longer needed to create taker orders if all fills were hedged
-        if len(self._order_fill_sell_events[market_pair]) == 0:
-            del self._order_fill_sell_events[market_pair]
+        del self._taker_order_timestamps[order_id]
+        if maker_order_id in self._ongoing_hedging:
+            del self._ongoing_hedging[maker_order_id]
 
     async def main(self, timestamp: float):
         try:
