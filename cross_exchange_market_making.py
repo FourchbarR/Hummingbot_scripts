@@ -495,37 +495,38 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
 
     async def replace_taker_limit_with_market_order(self, order_id: str):
         self.logger().info(f"Starting the process to replace taker limit order {order_id} with a market order.")
-    
+        
         if order_id not in self._taker_to_maker_order_ids:
             self.logger().info(f"Taker order {order_id} has already been filled or removed. Exiting process.")
             return
-    
+        
         market_pair = self._market_pair_tracker.get_market_pair_from_order_id(order_id)
-    
+        
         if market_pair is None:
             self.logger().warning(f"Taker limit order {order_id} not found in market pair tracker. Cannot replace it. Exiting process.")
             return
-    
+        
         maker_order_id = self._taker_to_maker_order_ids.get(order_id)
-    
+        
         # Retrieve filled quantities and remaining quantity to fill
         filled_quantity = self._taker_filled_quantities.get(maker_order_id, {}).get(order_id, Decimal(0))
         original_order = self._sb_order_tracker.get_limit_order(market_pair.taker, order_id)
         if original_order is None:
             self.logger().warning(f"Original taker order {order_id} not found in order tracker. Exiting process.")
             return
-    
+        
         remaining_quantity = original_order.quantity - filled_quantity
         self.logger().info(f"Original quantity: {original_order.quantity}, Filled quantity: {filled_quantity}, Remaining quantity: {remaining_quantity}")
-    
+        
         if remaining_quantity <= Decimal("0"):
             self.logger().info(f"Taker limit order {order_id} is already fully filled. No need to replace it with a market order.")
+            await self.clean_up_after_taker_order(maker_order_id, order_id)
             return
-    
+        
         # Cancel the limit order and place a market order for the remaining quantity
         self.cancel_order(market_pair.taker, order_id)
         self.logger().info(f"Cancel request for limit order {order_id} has been sent.")
-    
+        
         if remaining_quantity > Decimal("0"):
             if original_order.is_buy:
                 self.logger().info(f"Placing a market buy order on {market_pair.taker.market.display_name} for remaining quantity {remaining_quantity}.")
@@ -543,29 +544,48 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 self.notify_hb_app_with_timestamp(
                     f"Taker MARKET SELL order ({remaining_quantity} {market_pair.taker.base_asset}) has been placed to cover unfilled quantity."
                 )
-    
-            self.logger().info(f"Market order placed successfully for {remaining_quantity} {market_pair.taker.base_asset}.")
+        
+        # Appeler la fonction de nettoyage après l'exécution de l'ordre
+        await self.clean_up_after_taker_order(maker_order_id, order_id)
 
-        # Nettoyer les structures de suivi des ordres taker/maker
+
+    async def clean_up_after_taker_order(self, maker_order_id: str, taker_order_id: str):
+        """
+        Nettoie les structures de suivi après l'exécution ou la couverture d'un ordre sur le taker.
+        """
+        # Supprimer l'ordre taker des structures de suivi
         if taker_order_id in self._taker_to_maker_order_ids:
             del self._taker_to_maker_order_ids[taker_order_id]
+            
+        # Supprimer la correspondance maker-taker
         if maker_order_id in self._maker_to_taker_order_ids:
-            del self._maker_to_taker_order_ids[maker_order_id]
-        
-        # Supprimer les quantités remplies associées à cet ordre
+            if taker_order_id in self._maker_to_taker_order_ids[maker_order_id]:
+                self._maker_to_taker_order_ids[maker_order_id].remove(taker_order_id)
+            # Si plus aucun ordre taker n'est associé à cet ordre maker, le supprimer
+            if not self._maker_to_taker_order_ids[maker_order_id]:
+                del self._maker_to_taker_order_ids[maker_order_id]
+    
+        # Supprimer les quantités remplies associées à cet ordre taker
         if maker_order_id in self._taker_filled_quantities:
-            del self._taker_filled_quantities[maker_order_id]
-        
+            if taker_order_id in self._taker_filled_quantities[maker_order_id]:
+                del self._taker_filled_quantities[maker_order_id][taker_order_id]
+            if not self._taker_filled_quantities[maker_order_id]:
+                del self._taker_filled_quantities[maker_order_id]
+    
         # Supprimer l'horodatage de l'ordre taker
         if taker_order_id in self._taker_order_timestamps:
             del self._taker_order_timestamps[taker_order_id]
-        
+    
         # Si le hedging est terminé, retirer l'entrée du hedging en cours
         if maker_order_id in self._ongoing_hedging:
             del self._ongoing_hedging[maker_order_id]
-        
+    
         # Nettoyer les tâches de hedging terminées
         self._hedge_maker_order_tasks = [task for task in self._hedge_maker_order_tasks if not task.done()]
+    
+        # Log du nettoyage pour vérification
+        self.logger().info(f"Cleaning done for maker order {maker_order_id} and taker order {taker_order_id}.")
+
 
     async def main(self, timestamp: float):
         try:
