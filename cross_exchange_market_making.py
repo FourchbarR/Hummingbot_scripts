@@ -858,12 +858,10 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
     """
     def did_cancel_order(self, order_canceled_event: OrderCancelledEvent):
         if order_canceled_event.order_id in self._taker_to_maker_order_ids.keys():
-            self.handle_unfilled_taker_order(order_canceled_event)"""
-    """
+            self.handle_unfilled_taker_order(order_canceled_event)
+    
     def did_fail_order(self, order_failed_event: MarketOrderFailureEvent):
-        """
         Cette méthode est appelée chaque fois qu'un ordre échoue, et traite le nettoyage associé.
-        """
         if order_failed_event.order_id in self._taker_to_maker_order_ids.keys():
             # Traiter l'ordre échoué
             self.handle_unfilled_taker_order(order_failed_event)
