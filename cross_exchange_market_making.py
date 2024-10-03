@@ -568,7 +568,13 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
 
         if order_id in self._taker_order_timestamps:
             del self._taker_order_timestamps[order_id]
-
+            
+        # **Important** : Supprimer l'ordre du suivi ongoing_hedging
+        try:
+            self.del_order_from_ongoing_hedging(order_id)
+        except KeyError:
+            self.logger().warning(f"Ongoing hedging not found for order id {order_id}")
+        
         # Check if there are no more taker orders for this maker order
         active_taker_orders = set(self._taker_to_maker_order_ids.keys()).intersection(
             set(self._maker_to_taker_order_ids.get(maker_order_id, []))
