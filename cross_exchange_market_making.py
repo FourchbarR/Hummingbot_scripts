@@ -497,56 +497,64 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                    
     async def replace_taker_limit_with_market_order(self, order_id: str):
         self.logger().info(f"Starting the process to replace taker limit order {order_id} with a market order.")
-
+    
         if order_id not in self._taker_to_maker_order_ids:
             self.logger().info(f"Taker order {order_id} has already been filled or removed. Exiting process.")
             return
-
+    
         market_pair = self._market_pair_tracker.get_market_pair_from_order_id(order_id)
-
+    
         if market_pair is None:
             self.logger().warning(f"Taker limit order {order_id} not found in market pair tracker. Cannot replace it. Exiting process.")
             return
-
+    
         maker_order_id = self._taker_to_maker_order_ids.get(order_id)
-
+    
         # Retrieve filled quantities and remaining quantity to fill
         filled_quantity = self._taker_filled_quantities.get(maker_order_id, {}).get(order_id, Decimal(0))
         original_order = self._sb_order_tracker.get_limit_order(market_pair.taker, order_id)
         if original_order is None:
             self.logger().warning(f"Original taker order {order_id} not found in order tracker. Exiting process.")
             return
-
+    
         remaining_quantity = original_order.quantity - filled_quantity
         self.logger().info(f"Original quantity: {original_order.quantity}, Filled quantity: {filled_quantity}, Remaining quantity: {remaining_quantity}")
-
+    
         if remaining_quantity <= Decimal("0"):
             self.logger().info(f"Taker limit order {order_id} is already fully filled. No need to replace it with a market order.")
             del self._taker_order_timestamps[order_id]
             return
-
+    
         # Cancel the limit order and place a market order for the remaining quantity
         self.cancel_order(market_pair.taker, order_id)
         self.logger().info(f"Cancel request for limit order {order_id} has been sent.")
-
+    
         if remaining_quantity > Decimal("0"):
             if original_order.is_buy:
                 self.logger().info(f"Placing a market buy order on {market_pair.taker.market.display_name} for remaining quantity {remaining_quantity}.")
-                self.buy_with_specific_market(market_pair.taker, remaining_quantity, order_type=OrderType.MARKET)
-
+                new_market_order_id = self.buy_with_specific_market(market_pair.taker, remaining_quantity, order_type=OrderType.MARKET)
+                
+                # Ajouter l'ordre market dans le suivi et la base de données
+                self._sb_order_tracker.add_create_order_pending(new_market_order_id)
+                self._market_pair_tracker.start_tracking_order_id(new_market_order_id, market_pair.taker.market, market_pair)
+                
                 # Notify the user that the market buy order was placed
                 self.notify_hb_app_with_timestamp(
                     f"Taker MARKET BUY order ({remaining_quantity} {market_pair.taker.base_asset}) has been placed to cover unfilled quantity."
                 )
             else:
                 self.logger().info(f"Placing a market sell order on {market_pair.taker.market.display_name} for remaining quantity {remaining_quantity}.")
-                self.sell_with_specific_market(market_pair.taker, remaining_quantity, order_type=OrderType.MARKET)
-
+                new_market_order_id = self.sell_with_specific_market(market_pair.taker, remaining_quantity, order_type=OrderType.MARKET)
+                
+                # Ajouter l'ordre market dans le suivi et la base de données
+                self._sb_order_tracker.add_create_order_pending(new_market_order_id)
+                self._market_pair_tracker.start_tracking_order_id(new_market_order_id, market_pair.taker.market, market_pair)
+                
                 # Notify the user that the market sell order was placed
                 self.notify_hb_app_with_timestamp(
                     f"Taker MARKET SELL order ({remaining_quantity} {market_pair.taker.base_asset}) has been placed to cover unfilled quantity."
                 )
-
+    
             self.logger().info(f"Market order placed successfully for {remaining_quantity} {market_pair.taker.base_asset}.")
 
         # Cleaning structures
