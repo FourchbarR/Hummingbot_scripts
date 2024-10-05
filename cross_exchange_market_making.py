@@ -494,7 +494,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             self.logger().info(f"_taker_filled_quantities: {self._taker_filled_quantities}")
             self.logger().info(f"_ongoing_hedging: {self._ongoing_hedging}")
             self.logger().info(f"_maker_to_hedging_trades: {self._maker_to_hedging_trades}")
-                   
+
     async def replace_taker_limit_with_market_order(self, order_id: str):
         self.logger().info(f"Starting the process to replace taker limit order {order_id} with a market order.")
     
@@ -556,7 +556,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 )
     
             self.logger().info(f"Market order placed successfully for {remaining_quantity} {market_pair.taker.base_asset}.")
-
+    
         # Cleaning structures
         # Remove the completed taker order from tracking structures
         if order_id in self._taker_to_maker_order_ids:
@@ -565,7 +565,24 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 del self._taker_filled_quantities[maker_order_id][order_id]
                 if not self._taker_filled_quantities[maker_order_id]:
                     del self._taker_filled_quantities[maker_order_id]
-
+    
+            # Cleaning buy/sell fill events
+            if maker_order_id in self._order_fill_buy_events:
+                self._order_fill_buy_events[maker_order_id] = [
+                    event for event in self._order_fill_buy_events[maker_order_id]
+                    if event[1].order_id != order_id
+                ]
+                if not self._order_fill_buy_events[maker_order_id]:
+                    del self._order_fill_buy_events[maker_order_id]
+    
+            if maker_order_id in self._order_fill_sell_events:
+                self._order_fill_sell_events[maker_order_id] = [
+                    event for event in self._order_fill_sell_events[maker_order_id]
+                    if event[1].order_id != order_id
+                ]
+                if not self._order_fill_sell_events[maker_order_id]:
+                    del self._order_fill_sell_events[maker_order_id]
+    
         if order_id in self._taker_order_timestamps:
             del self._taker_order_timestamps[order_id]
             
@@ -579,14 +596,14 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         active_taker_orders = set(self._taker_to_maker_order_ids.keys()).intersection(
             set(self._maker_to_taker_order_ids.get(maker_order_id, []))
         )
-
+    
         if not active_taker_orders:
             # Remove the completed fully hedged maker order from tracking
             if maker_order_id in self._maker_to_taker_order_ids:
                 del self._maker_to_taker_order_ids[maker_order_id]
                 if maker_order_id in self._maker_to_hedging_trades:
                     del self._maker_to_hedging_trades[maker_order_id]
-
+    
         # Trigger the next cycle of placing limit orders on the maker
         await self.trigger_new_maker_orders(market_pair)
 
