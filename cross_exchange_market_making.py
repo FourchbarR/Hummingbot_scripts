@@ -533,11 +533,11 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             if original_order.is_buy:
                 self.logger().info(f"Placing a market buy order on {market_pair.taker.market.display_name} for remaining quantity {remaining_quantity}.")
                 new_market_order_id = self.buy_with_specific_market(market_pair.taker, remaining_quantity, order_type=OrderType.MARKET)
-                
-                # Ajouter l'ordre market dans le suivi et la base de données
+    
+                # Add the market order to tracking and database
                 self._sb_order_tracker.add_create_order_pending(new_market_order_id)
                 self._market_pair_tracker.start_tracking_order_id(new_market_order_id, market_pair.taker.market, market_pair)
-                
+    
                 # Notify the user that the market buy order was placed
                 self.notify_hb_app_with_timestamp(
                     f"Taker MARKET BUY order ({remaining_quantity} {market_pair.taker.base_asset}) has been placed to cover unfilled quantity."
@@ -545,11 +545,11 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             else:
                 self.logger().info(f"Placing a market sell order on {market_pair.taker.market.display_name} for remaining quantity {remaining_quantity}.")
                 new_market_order_id = self.sell_with_specific_market(market_pair.taker, remaining_quantity, order_type=OrderType.MARKET)
-                
-                # Ajouter l'ordre market dans le suivi et la base de données
+    
+                # Add the market order to tracking and database
                 self._sb_order_tracker.add_create_order_pending(new_market_order_id)
                 self._market_pair_tracker.start_tracking_order_id(new_market_order_id, market_pair.taker.market, market_pair)
-                
+    
                 # Notify the user that the market sell order was placed
                 self.notify_hb_app_with_timestamp(
                     f"Taker MARKET SELL order ({remaining_quantity} {market_pair.taker.base_asset}) has been placed to cover unfilled quantity."
@@ -566,32 +566,32 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 if not self._taker_filled_quantities[maker_order_id]:
                     del self._taker_filled_quantities[maker_order_id]
     
-            # Cleaning buy/sell fill events
-            if maker_order_id in self._order_fill_buy_events:
-                self._order_fill_buy_events[maker_order_id] = [
-                    event for event in self._order_fill_buy_events[maker_order_id]
-                    if event[1].order_id != order_id
-                ]
-                if not self._order_fill_buy_events[maker_order_id]:
-                    del self._order_fill_buy_events[maker_order_id]
+        # Cleaning buy/sell fill events
+        if maker_order_id in self._order_fill_buy_events:
+            self._order_fill_buy_events[maker_order_id] = [
+                event for event in self._order_fill_buy_events[maker_order_id]
+                if event[1].order_id != order_id
+            ]
+            if not self._order_fill_buy_events[maker_order_id]:
+                del self._order_fill_buy_events[maker_order_id]
     
-            if maker_order_id in self._order_fill_sell_events:
-                self._order_fill_sell_events[maker_order_id] = [
-                    event for event in self._order_fill_sell_events[maker_order_id]
-                    if event[1].order_id != order_id
-                ]
-                if not self._order_fill_sell_events[maker_order_id]:
-                    del self._order_fill_sell_events[maker_order_id]
+        if maker_order_id in self._order_fill_sell_events:
+            self._order_fill_sell_events[maker_order_id] = [
+                event for event in self._order_fill_sell_events[maker_order_id]
+                if event[1].order_id != order_id
+            ]
+            if not self._order_fill_sell_events[maker_order_id]:
+                del self._order_fill_sell_events[maker_order_id]
     
         if order_id in self._taker_order_timestamps:
             del self._taker_order_timestamps[order_id]
-            
-        # **Important** : Supprimer l'ordre du suivi ongoing_hedging
+    
+        # **Important**: Remove the order from ongoing hedging
         try:
             self.del_order_from_ongoing_hedging(order_id)
         except KeyError:
             self.logger().warning(f"Ongoing hedging not found for order id {order_id}")
-        
+    
         # Check if there are no more taker orders for this maker order
         active_taker_orders = set(self._taker_to_maker_order_ids.keys()).intersection(
             set(self._maker_to_taker_order_ids.get(maker_order_id, []))
