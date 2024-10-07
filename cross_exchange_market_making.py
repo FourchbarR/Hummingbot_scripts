@@ -553,11 +553,21 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         # ---------------------------------------------------------------
         # Remove the completed taker order
         del self._taker_to_maker_order_ids[order_id]
-        
+    
+        # Remove the filled quantities for the taker order
+        if maker_order_id in self._taker_filled_quantities:
+            del self._taker_filled_quantities[maker_order_id][order_id]
+            if not self._taker_filled_quantities[maker_order_id]:
+                del self._taker_filled_quantities[maker_order_id]
+    
+        # Remove the timestamp for the taker order
+        if order_id in self._taker_order_timestamps:
+            del self._taker_order_timestamps[order_id]
+    
         # Get all active taker order ids for the maker order id
         active_taker_ids = set(self._taker_to_maker_order_ids.keys()).intersection(set(
             self._maker_to_taker_order_ids[maker_order_id]))
-        
+    
         if len(active_taker_ids) == 0:
             # Was maker order fully filled?
             maker_order_ids = list(order_id for market, limit_order, order_id in self.active_maker_limit_orders)
