@@ -1,4 +1,4 @@
-import logging
+fimport logging
 from collections import defaultdict, deque
 from decimal import Decimal
 from enum import Enum
@@ -132,7 +132,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         self._taker_to_maker_order_ids = {}
         # Holds hedging trade ids for respective maker orders
         self._maker_to_hedging_trades = {}
-        orders_to_cancel = []
+        self._orders_to_cancel = []
 
         all_markets = list(self._maker_markets | self._taker_markets)
         
