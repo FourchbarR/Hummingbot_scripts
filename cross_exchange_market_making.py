@@ -579,8 +579,8 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
             self.logger().warning(f"Ongoing hedging not found for order id {order_id}")
     
         # Cleaning hedged maker fill events for both buy and sell cases
-        if original_order.is_buy:
-            # Delete hedged maker fill event (BUY case)
+        if original_order.is_sell:
+            # Delete hedged maker fill event (SELL maker case)
             self.logger().info(f"Cleaning buy events for maker order {maker_order_id}.")
             fill_events = []
             for fill_event in self._order_fill_buy_events[market_pair]:
@@ -599,7 +599,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 self.logger().info(f"All buy events have been cleaned for market pair {market_pair}. Removing from tracking.")
                 del self._order_fill_buy_events[market_pair]
         else:
-            # Delete hedged maker fill event (SELL case)
+            # Delete hedged maker fill event (Buy maker case)
             self.logger().info(f"Cleaning sell events for maker order {maker_order_id}.")
             fill_events = []
             for fill_event in self._order_fill_sell_events[market_pair]:
