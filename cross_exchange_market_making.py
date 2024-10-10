@@ -828,13 +828,18 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
     def handle_unfilled_taker_order(self, order_event):
         order_id = order_event.order_id
         market_pair = self._market_pair_tracker.get_market_pair_from_order_id(order_id)
-
+        
+        # Vérification si l'ordre est déjà en cours de traitement pour annulation par la logique de timeout
+        if order_id in self._orders_to_cancel:
+            self.logger().info(f"Taker order {order_id} is already marked for cancellation. Skipping handle_unfilled_taker_order.")
+            return  # On saute le traitement de cet ordre car il est déjà pris en charge par la logique d'annulation
+    
         # Resubmit hedging order
         self.hedge_tasks_cleanup()
         self._hedge_maker_order_tasks += [safe_ensure_future(
             self.check_and_hedge_orders(order_id, market_pair)
         )]
-
+    
         # Remove the cancelled, failed or expired taker order
         del self._taker_to_maker_order_ids[order_event.order_id]
 
