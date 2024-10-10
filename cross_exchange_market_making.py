@@ -494,7 +494,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
     
         if order_id not in self._taker_to_maker_order_ids:
             self.logger().info(f"Taker order {order_id} has already been filled or removed. Exiting process.")
-            # Trigger the next cycle of placing limit orders on the maker
+            return
     
         market_pair = self._market_pair_tracker.get_market_pair_from_order_id(order_id)
     
@@ -528,7 +528,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 self.logger().info(f"Placing a market buy order on {market_pair.taker.market.display_name} for remaining quantity {remaining_quantity}.")
                 new_market_order_id = self.buy_with_specific_market(market_pair.taker, remaining_quantity, order_type=OrderType.MARKET)
     
-                # Ajouter l'ordre market dans le suivi et la base de donnees
+                # Ajouter l'ordre market dans le suivi et la base de données
                 self._sb_order_tracker.add_create_order_pending(new_market_order_id)
                 self._market_pair_tracker.start_tracking_order_id(new_market_order_id, market_pair.taker.market, market_pair)
     
@@ -540,7 +540,7 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
                 self.logger().info(f"Placing a market sell order on {market_pair.taker.market.display_name} for remaining quantity {remaining_quantity}.")
                 new_market_order_id = self.sell_with_specific_market(market_pair.taker, remaining_quantity, order_type=OrderType.MARKET)
     
-                # Ajouter l'ordre market dans le suivi et la base de donnees
+                # Ajouter l'ordre market dans le suivi et la base de données
                 self._sb_order_tracker.add_create_order_pending(new_market_order_id)
                 self._market_pair_tracker.start_tracking_order_id(new_market_order_id, market_pair.taker.market, market_pair)
     
@@ -551,34 +551,25 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
     
             self.logger().info(f"Market order placed successfully for {remaining_quantity} {market_pair.taker.base_asset}.")
     
-        # Block to remove and clean up orders, same as in the initial code
-        # ---------------------------------------------------------------
-        # Remove the completed taker order
+        # Block to remove and clean up orders
         del self._taker_to_maker_order_ids[order_id]
     
-        # Remove the filled quantities for the taker order
         if maker_order_id in self._taker_filled_quantities:
             del self._taker_filled_quantities[maker_order_id][order_id]
             if not self._taker_filled_quantities[maker_order_id]:
                 del self._taker_filled_quantities[maker_order_id]
     
-        # Remove the timestamp for the taker order
         if order_id in self._taker_order_timestamps:
             del self._taker_order_timestamps[order_id]
-
-        # Remove the order id from orders to cancel
+    
         if order_id in self._orders_to_cancel:
             self._orders_to_cancel.remove(order_id)
     
-        # Get all active taker order ids for the maker order id
-        active_taker_ids = set(self._taker_to_maker_order_ids.keys()).intersection(set(
-            self._maker_to_taker_order_ids[maker_order_id]))
+        active_taker_ids = set(self._taker_to_maker_order_ids.keys()).intersection(set(self._maker_to_taker_order_ids[maker_order_id]))
     
         if len(active_taker_ids) == 0:
-            # Was maker order fully filled?
             maker_order_ids = list(order_id for market, limit_order, order_id in self.active_maker_limit_orders)
             if maker_order_id not in maker_order_ids:
-                # Remove the completed fully hedged maker order
                 del self._maker_to_taker_order_ids[maker_order_id]
                 del self._maker_to_hedging_trades[maker_order_id]
     
@@ -587,18 +578,45 @@ class CrossExchangeMarketMakingStrategy(StrategyPyBase):
         except KeyError:
             self.logger().warning(f"Ongoing hedging not found for order id {order_id}")
     
-        # Delete hedged maker fill event
-        fill_events = []
-        for fill_event in self._order_fill_sell_events[market_pair]:
-            if self.is_fill_event_in_ongoing_hedging(fill_event):
-                fill_events += [fill_event]
-        self._order_fill_sell_events[market_pair] = fill_events
+        # Cleaning hedged maker fill events for both buy and sell cases
+        if original_order.is_buy:
+            # Delete hedged maker fill event (BUY case)
+            self.logger().info(f"Cleaning buy events for maker order {maker_order_id}.")
+            fill_events = []
+            for fill_event in self._order_fill_buy_events[market_pair]:
+                if self.is_fill_event_in_ongoing_hedging(fill_event):
+                    fill_events += [fill_event]
+            self._order_fill_buy_events[market_pair] = fill_events
     
-        # Cleanup maker fill events - no longer needed to create taker orders if all fills were hedged
-        if len(self._order_fill_sell_events[market_pair]) == 0:
-            del self._order_fill_sell_events[market_pair]
+            # Log the result of the cleaning process
+            if len(fill_events) < len(self._order_fill_buy_events.get(market_pair, [])):
+                self.logger().info(f"Cleaned hedged buy events for market pair {market_pair}. Remaining events: {len(fill_events)}.")
+            else:
+                self.logger().info(f"No hedged buy events were removed for market pair {market_pair}.")
     
-        # ---------------------------------------------------------------
+            # Cleanup maker fill events - no longer needed to create taker orders if all fills were hedged
+            if len(self._order_fill_buy_events[market_pair]) == 0:
+                self.logger().info(f"All buy events have been cleaned for market pair {market_pair}. Removing from tracking.")
+                del self._order_fill_buy_events[market_pair]
+        else:
+            # Delete hedged maker fill event (SELL case)
+            self.logger().info(f"Cleaning sell events for maker order {maker_order_id}.")
+            fill_events = []
+            for fill_event in self._order_fill_sell_events[market_pair]:
+                if self.is_fill_event_in_ongoing_hedging(fill_event):
+                    fill_events += [fill_event]
+            self._order_fill_sell_events[market_pair] = fill_events
+    
+            # Log the result of the cleaning process
+            if len(fill_events) < len(self._order_fill_sell_events.get(market_pair, [])):
+                self.logger().info(f"Cleaned hedged sell events for market pair {market_pair}. Remaining events: {len(fill_events)}.")
+            else:
+                self.logger().info(f"No hedged sell events were removed for market pair {market_pair}.")
+    
+            # Cleanup maker fill events - no longer needed to create taker orders if all fills were hedged
+            if len(self._order_fill_sell_events[market_pair]) == 0:
+                self.logger().info(f"All sell events have been cleaned for market pair {market_pair}. Removing from tracking.")
+                del self._order_fill_sell_events[market_pair]
     
         # Trigger the next cycle of placing limit orders on the maker
         await self.trigger_new_maker_orders(market_pair)
